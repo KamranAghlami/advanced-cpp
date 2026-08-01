@@ -1,0 +1,106 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Note: every job clones EnTT and Taskflow through FetchContent. There is no
+# actions/cache step for third_party/ because CMake's git download step wipes the
+# source directory whenever its stamp file is missing, so caching the sources
+# without also caching build/_deps buys nothing.
+
+jobs:
+  build:
+    name: ${{ matrix.compiler.name }} / C++${{ matrix.std }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # C++20 is the floor both libraries declare; 23 is what this project
+        # builds at by default. Exercise code has to keep working at 20,
+        # otherwise we have learned a C++23 answer to a C++20 problem.
+        std: [20, 23]
+        compiler:
+          - { name: gcc, cc: gcc, cxx: g++, apt: g++ }
+          - { name: clang, cc: clang, cxx: clang++, apt: clang }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ${{ matrix.compiler.apt }}
+
+      - name: Configure
+        env:
+          CC: ${{ matrix.compiler.cc }}
+          CXX: ${{ matrix.compiler.cxx }}
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: sanitizer / ${{ matrix.san.name }}
+    runs-on: ubuntu-24.04
+    # The TSan leg is informational for now -- see the comment on its matrix entry.
+    continue-on-error: ${{ matrix.san.informational }}
+    strategy:
+      fail-fast: false
+      matrix:
+        san:
+          - name: asan-ubsan
+            flags: -fsanitize=address,undefined -fno-omit-frame-pointer -g
+            informational: false
+          # Informational until Phase C: the only threaded code in the tree today
+          # is Taskflow's own lock-free internals, which we did not write, so a
+          # report here says nothing about our code. Flip `informational` to false
+          # once Module 9's queue lands in src/.
+          - name: tsan
+            flags: -fsanitize=thread -fno-omit-frame-pointer -g
+            informational: true
+    steps:
+      - uses: actions/checkout@v4
+
+      # clang deliberately, not gcc: GCC's TSan does not model
+      # atomic_thread_fence (it warns -Wtsan and ignores it), and that fence is
+      # the entire correctness argument in Modules 9 and 10. See docs/CLAUDE.md.
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang
+
+      - name: Configure
+        env:
+          CC: clang
+          CXX: clang++
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Debug
+          -DCMAKE_CXX_FLAGS="${{ matrix.san.flags }}"
+
+      - name: Build
+        run: cmake --build build -j
+
+      # The sanitizer runtimes abort with "unexpected memory mapping" when the
+      # kernel hands out more ASLR entropy than they can map around.
+      - name: Lower ASLR entropy
+        run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
+
+      - name: Test
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+          TSAN_OPTIONS: halt_on_error=1
+        run: ctest --test-dir build --output-on-failure

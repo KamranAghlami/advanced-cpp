@@ -51,8 +51,10 @@ EnTT and 4.1 Taskflow APIs also differ from the widely-documented releases (e.g.
 ## Layout
 
 ```
+README.md               human-facing intro + module progress table
 CMakeLists.txt          root: deps, the template executable, acpp_exercise()
 cmake/dependencies.cmake  FetchContent pins for EnTT + Taskflow
+.github/workflows/ci.yml  build matrix + sanitizers
 src/                    shared, reusable code: the pieces later modules build on
 modules/NN-slug/        per-module exercise programs + CMakeLists.txt + NOTES.md
   00-setup/             Module 0 smoke tests (entt_smoke, taskflow_smoke)
@@ -86,18 +88,36 @@ drive-by.
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug   # first run clones the deps
 cmake --build build -j
-./build/modules/00-setup/entt_smoke
-./build/modules/00-setup/taskflow_smoke
+ctest --test-dir build --output-on-failure
 ```
 
-Both smoke tests print per-check `ok`/`FAIL` lines and exit non-zero on failure, so they work
-as a readiness check after a toolchain or pin change. Both passed at `-std=c++23` and
-`-std=c++20` on 2026-08-01.
+Anything that should gate CI gets an `add_test(NAME x COMMAND x)` next to its
+`acpp_exercise()`. Benchmarks and codegen probes should *not* — they are not pass/fail.
 
-C++ standard is set to **23** in `CMakeLists.txt`. The libraries under study require **C++20**
-and use C++20 spellings throughout (`requires`, `consteval`, `using enum`, `std::popcount`,
-`std::bit_ceil`, `atomic_flag::test`). When reproducing a library technique, confirm it still
-compiles at `-std=c++20` — otherwise you have learned a C++23 solution to a C++20 problem.
+The smoke tests also print per-check `ok`/`FAIL` lines and exit non-zero on failure, so they
+work as a standalone readiness check after a toolchain or pin change.
+
+C++ standard defaults to **23** but is a cache variable, so `-DCMAKE_CXX_STANDARD=20` works.
+The libraries under study require **C++20** and use C++20 spellings throughout (`requires`,
+`consteval`, `using enum`, `std::popcount`, `std::bit_ceil`, `atomic_flag::test`). When
+reproducing a library technique, confirm it still compiles at 20 — otherwise you have learned
+a C++23 solution to a C++20 problem. CI enforces this.
+
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml), on push to `main`, on PRs, and on
+manual dispatch:
+
+- **build** — gcc × clang × C++20 × C++23, then `ctest`.
+- **sanitizers** — clang, ASan+UBSan blocking and TSan `continue-on-error`.
+
+The TSan leg is informational **only because there is no concurrent code of ours yet** — the
+only threaded code in the tree is Taskflow's own lock-free internals. Flip
+`informational: false` on that matrix entry when Module 9's queue lands in `src/`; leaving it
+informational past that point would quietly defeat the Phase C ground rules.
+
+Both sanitizer legs need `vm.mmap_rnd_bits=28` (the workflow sets it) for the same ASLR reason
+described below.
 
 Reference builds of the libraries themselves (useful for reading their tests):
 

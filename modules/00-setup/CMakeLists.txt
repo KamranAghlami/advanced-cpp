@@ -9,6 +9,8 @@
 
 acpp_exercise(entt_smoke entt_smoke.cpp)
 target_link_libraries(entt_smoke PRIVATE EnTT::EnTT)
+add_test(NAME entt_smoke COMMAND entt_smoke)
 
 acpp_exercise(taskflow_smoke taskflow_smoke.cpp)
 target_link_libraries(taskflow_smoke PRIVATE Taskflow::Taskflow)
+add_test(NAME taskflow_smoke COMMAND taskflow_smoke)

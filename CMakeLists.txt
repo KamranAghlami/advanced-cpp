@@ -1,8 +1,12 @@
 cmake_minimum_required(VERSION 3.20)
 
 project(advanced-cpp LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 23)
+# Cached so CI (and you) can build against the libraries' actual floor with
+# -DCMAKE_CXX_STANDARD=20. See docs/CLAUDE.md.
+set(CMAKE_CXX_STANDARD 23 CACHE STRING "C++ standard revision to build with")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+enable_testing()
 
 # EnTT and Taskflow at the commits the course text is pinned to. See docs/CLAUDE.md.
 include(cmake/dependencies.cmake)
