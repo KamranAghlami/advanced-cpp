@@ -6,17 +6,18 @@
 // inline definitions, but NOT across shared objects unless the symbol is
 // visible. Hence ACPP_API on the declaration in type_info.hpp.
 //
-// ACPP_MAYBE_ATOMIC covers the other half: two threads asking for the ID of two
-// different types race on the increment. The static-local guard serialises each
-// *initialiser*, not the counter they share.
+// The atomicity of the counter is a policy, not a constant: two threads asking
+// for the IDs of two different types race on the increment, but a single-threaded
+// freestanding build should not pay for that. Module 2 moved the decision into
+// counter_traits, so it is spelled here as a tag rather than a macro.
 
+#include "counter.hpp"
 #include "type_info.hpp"
 
 namespace acpp::internal {
 
 id_type type_index::next() noexcept {
-    static ACPP_MAYBE_ATOMIC(id_type) value{};
-    return value++;
+    return sequential_counter<type_index>::next();
 }
 
 } // namespace acpp::internal

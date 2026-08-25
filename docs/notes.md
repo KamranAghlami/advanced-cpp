@@ -46,3 +46,54 @@ of one per shared object.
 on the template is not enough — an instantiation's visibility is the minimum over
 the template *and its arguments*, so the component types need exporting too.
 Measured in `modules/01-type-identity/NOTES.md`.
+
+---
+
+## Module 2 — Traits as an API surface
+
+**Constrained partial specialization** · `entt/entity/component.hpp` ·
+`src/acpp/component.hpp`
+`template<typename T> requires T::in_place_delete struct in_place_delete<T>:
+true_type {};` — a specialization that only exists when the constraint holds,
+replacing C++17's `void_t` detection plus two layers of `conditional_t`.
+*Use when:* you want a member on the user's type to change a library default.
+Note it requires the member to exist *and* be true, so `= false` correctly does
+not opt in.
+
+**Policy inferred from type properties** · same file
+Derive the default from something the type already tells you, so the common case
+needs no configuration at all.
+*Use when:* the inference is a *correctness* statement, not a guess.
+`in_place_delete = !movable` qualifies because swap-and-pop is not an available
+implementation for a non-movable type. "Probably wants X" does not qualify — that
+belongs on the opt-in rung.
+
+**Customization-point ladder** · same file
+Three rungs: inferred default, inline `static constexpr` opt-in, full trait
+specialization. Each more invasive than the last.
+*Use when:* designing any library API surface. The middle rung is what separates
+a library from a framework — the user opts in from inside their own type, with no
+macro and no specialization in your namespace.
+
+**Branch collapsed into arithmetic** · same file
+`!is_empty_v<T> * PACKED_PAGE` instead of a ternary, so the empty case falls out
+as `0` and every downstream user gets "allocate nothing" without an `if`.
+
+**Type list algebra** · `entt/core/type_traits.hpp` · `src/acpp/type_traits.hpp`
+A `type_list<T...>` with no storage and no members, manipulated purely by partial
+specialization. Costs instantiations, nothing else.
+*Use when:* you need a compile-time sequence of types. Not `std::tuple`, which
+drags storage and a large header along.
+
+**Fold-expression accumulator instead of recursion** · `src/acpp/type_traits.hpp`
+Carry state through a left fold over a declared-but-undefined `operator+`, named
+only inside `decltype`, rather than recursing through partial specializations.
+*Use when:* instantiation depth matters — and it usually does, because depth is a
+cliff (`-ftemplate-depth` is a hard build failure) where time is a slope.
+Measured in `modules/02-traits/NOTES.md`.
+
+**Policy as a trait, not a macro** · `src/acpp/counter.hpp`
+Replace `#if`-driven policy with a trait keyed on a tag type: inferred default,
+inline opt-in, specialization override.
+*Use when:* a build flag is answering a question that different callers in the
+same build could legitimately answer differently.

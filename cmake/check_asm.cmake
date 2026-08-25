@@ -42,15 +42,21 @@ foreach(line IN LISTS lines)
         if(line MATCHES "^[ \t]*\\.size[ \t]+${SYMBOL}[,\t ]" OR line MATCHES "^[ \t]*\\.cfi_endproc")
             set(inside OFF)
         else()
-            # Drop assembler bookkeeping: it is not code and it is noisy.
-            if(NOT line MATCHES "^[ \t]*\\.(cfi_|file|loc|p2align|align|type|globl|section|text|ident|LF|def|scl|endef|seh_)"
+            # Assembler bookkeeping and comments: not code, and noisy. The two
+            # compilers spell a surprising amount of this differently -- clang
+            # tags every label with a `# @name` comment and uses .Lfunc_end,
+            # gcc uses .LFE -- so the filter has to cover both.
+            if(NOT line MATCHES "^[ \t]*\\.(cfi_|file|loc|p2align|align|type|size|globl|weak|hidden|protected|section|text|data|ident|addrsig|LF|Lfunc|def|scl|endef|seh_)"
+               AND NOT line MATCHES "^[ \t]*[#/]"
                AND NOT line MATCHES "^[ \t]*$"
                AND NOT line MATCHES "^\\.L")
                 list(APPEND body "${line}")
                 math(EXPR count "${count} + 1")
             endif()
         endif()
-    elseif(line MATCHES "^${SYMBOL}:[ \t]*$")
+    # gcc:   `acpp_probe_name_data:`
+    # clang: `acpp_probe_name_data:                # @acpp_probe_name_data`
+    elseif(line MATCHES "^${SYMBOL}:([ \t]|$)")
         set(inside ON)
         set(found ON)
     endif()

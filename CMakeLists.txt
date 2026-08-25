@@ -105,6 +105,31 @@ function(acpp_asm_test test probe symbol)
              -P "${PROJECT_SOURCE_DIR}/cmake/check_asm.cmake")
 endfunction()
 
+# ---------------------------------------------------------------------------
+# Negative compilation.
+#
+#   acpp_compile_fail_test(<test> <source> [DEFS ...] [EXPECT <regex>])
+#
+# Several checkpoints in the course are of the form "give the exact code that
+# breaks without this". Those are claims, and the only honest way to keep them
+# is to compile them and require the failure.
+# ---------------------------------------------------------------------------
+function(acpp_compile_fail_test test source)
+    cmake_parse_arguments(ARG "" "EXPECT" "DEFS" ${ARGN})
+    set(defs "-DCOMPILER=${CMAKE_CXX_COMPILER}" "-DSTD=${CMAKE_CXX_STANDARD}"
+             "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+             "-DINCLUDES=${PROJECT_SOURCE_DIR}/src" "-DLABEL=${test}")
+    if(ARG_DEFS)
+        string(JOIN "@@" joined ${ARG_DEFS})
+        list(APPEND defs "-DDEFS=${joined}")
+    endif()
+    if(ARG_EXPECT)
+        list(APPEND defs "-DEXPECT=${ARG_EXPECT}")
+    endif()
+    add_test(NAME ${test} COMMAND ${CMAKE_COMMAND} ${defs}
+             -P "${PROJECT_SOURCE_DIR}/cmake/check_compile_fails.cmake")
+endfunction()
+
 add_subdirectory(modules/00-setup)
 add_subdirectory(modules/01-type-identity)
 add_subdirectory(modules/02-traits)

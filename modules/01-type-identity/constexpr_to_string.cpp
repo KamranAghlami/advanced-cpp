@@ -140,9 +140,18 @@ struct version {
     [[nodiscard]] constexpr small_string acpp_to_string() const noexcept {
         small_string out = stringify(major);
         out.data[out.length++] = '.';
-        for(const char c: stringify(minor).view()) {
+
+        // `tail` must be a named local. Ranging over `stringify(minor).view()`
+        // directly dangles: before C++23 (P2718R0) only the range initializer's
+        // top-level temporary is lifetime-extended, and the string_view is not
+        // it. GCC at -std=c++23 accepts it; clang and any C++20 build do not,
+        // and they are right to.
+        const small_string tail = stringify(minor);
+
+        for(const char c: tail.view()) {
             out.data[out.length++] = c;
         }
+
         return out;
     }
 };

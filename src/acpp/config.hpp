@@ -59,13 +59,32 @@
 
 // Concurrent first-touch of the counter (1.3). Two threads asking for two
 // *different* types both call next(). The static-local guard serialises each
-// initialiser, not the counter they share. Non-atomic is defensible in a
-// single-threaded build, so it is a knob rather than a decision.
-#if defined ACPP_NO_ATOMIC
-#    define ACPP_MAYBE_ATOMIC(Type) Type
+// initialiser, not the counter they share.
+//
+// This started life as an ACPP_MAYBE_ATOMIC(Type) macro. Module 2's exercise 3
+// replaced it with acpp::counter_traits<Tag>, which infers the answer from
+// __STDCPP_THREADS__ and lets a caller disagree per counter. ACPP_NO_ATOMIC
+// still moves the default; it no longer *is* the policy. See counter.hpp.
+
+// Storage tunables (Modules 2, 6, 7). Page sizes must be powers of two: the
+// paged indirection replaces a division with a shift and a mask, and both the
+// sparse array and the payload assert it at compile time.
+#ifndef ACPP_PACKED_PAGE
+#    define ACPP_PACKED_PAGE 1024
+#endif
+
+#ifndef ACPP_SPARSE_PAGE
+#    define ACPP_SPARSE_PAGE 4096
+#endif
+
+// Empty type optimisation. page_size asks `is_empty_v<ACPP_ETO_TYPE(Type)>`, so
+// substituting `void` -- which is never empty -- turns the optimisation off for
+// every type at once and gives empty components a real, zero-information payload
+// array. Occasionally what you want while debugging a layout question.
+#if defined ACPP_NO_ETO
+#    define ACPP_ETO_TYPE(Type) void
 #else
-#    include <atomic>
-#    define ACPP_MAYBE_ATOMIC(Type) ::std::atomic<Type>
+#    define ACPP_ETO_TYPE(Type) Type
 #endif
 
 #include <cstdint>

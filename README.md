@@ -34,6 +34,9 @@ Build against the libraries' actual floor with `-DCMAKE_CXX_STANDARD=20`; the de
 CMakeLists.txt            root: dependencies, acpp_exercise(), acpp_asm_probe()
 cmake/dependencies.cmake  FetchContent pins for EnTT + Taskflow
 cmake/check_asm.cmake     pattern-checks one function's -O2 assembly
+cmake/check_compile_fails.cmake  asserts a TU is ill-formed, for the right reason
+cmake/measure_template_cost.cmake  bisects a metaprogram's instantiation depth
+scripts/verify.sh         runs the CI matrix + sanitizers locally
 src/acpp/                 the library the modules build up, linked as `acpp`
 modules/NN-slug/          per-module exercises + NOTES.md, one executable each
 docs/                     the course, the project guide, notes, memory
@@ -54,7 +57,7 @@ every build rather than asserted once in prose.
 |---|---|---|
 | 0 | Tooling setup | ✅ |
 | 1 | Type identity without RTTI | ✅ [notes](modules/01-type-identity/NOTES.md) |
-| 2 | Traits as an API surface | |
+| 2 | Traits as an API surface | ✅ [notes](modules/02-traits/NOTES.md) |
 | 3 | Layout economy | |
 | 4 | The freestanding shim | |
 | 5 | Bit-packed handles | |
