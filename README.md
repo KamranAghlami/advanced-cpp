@@ -63,8 +63,8 @@ every build rather than asserted once in prose.
 | 5 | Bit-packed handles | ✅ [notes](modules/05-handles/NOTES.md) |
 | 6 | The sparse set | ✅ [notes](modules/06-sparse-set/NOTES.md) |
 | 7 | Storage & view iteration | ✅ [notes](modules/07-storage-and-views/NOTES.md) |
-| 8 | Type erasure, three ways | |
-| 9 | Chase–Lev work-stealing deque | |
+| 8 | Type erasure, three ways | ✅ [notes](modules/08-type-erasure/NOTES.md) |
+| 9 | Chase–Lev work-stealing deque | ✅ [notes](modules/09-work-stealing-deque/NOTES.md) |
 | 10 | Sleeping without lost wakeups | |
 | 11 | Scheduler & graph representation | |
 | 12 | Parallel algorithm design | |
@@ -78,8 +78,8 @@ checklist, not "it compiles."
 [`ci.yml`](.github/workflows/ci.yml) builds and tests on every push and pull request:
 
 - **build** — gcc and clang × C++20 and C++23, then `ctest`.
-- **sanitizers** — ASan+UBSan (blocking) and TSan (informational for now, since the only
-  threaded code in the tree is Taskflow's own; it becomes blocking when Module 9 lands).
+- **sanitizers** — ASan+UBSan and TSan, both blocking. TSan became blocking with Module 9,
+  when the first lock-free code of our own landed in `src/`.
 
 Two environment notes that bit here and are worth knowing before Phase C: the sanitizer
 runtimes need reduced ASLR entropy to start at all (`setarch $(uname -m) -R`, or

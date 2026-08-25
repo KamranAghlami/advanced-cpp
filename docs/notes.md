@@ -309,3 +309,99 @@ and is ambiguous. Qualify to disable ADL.
 An `-S` custom command depending only on its `.cpp` keeps passing against stale
 assembly after a header changes. `-MD -MF` plus `DEPFILE` fixes it.
 *Use when:* any generated artifact is used as evidence.
+
+---
+
+## Module 8 — Type erasure, three ways
+
+**SBO with a compile-time fit check** · `entt/core/any.hpp` · `src/acpp/any.hpp`
+`(Len != 0) && alignof(T) <= Align && sizeof(T) <= Len && is_nothrow_move_constructible_v<T>`.
+*The last clause is the one people drop:* relocating an embedded object moves the
+buffer, and a throwing move mid-relocation leaves two half-objects. A
+throwing-move type belongs on the heap, where relocation is a pointer swap.
+*Also:* `Len == 0` specialising the buffer away is a deliberate configuration —
+a pointer-only `any` for when everything is heap-allocated anyway.
+
+**Single-function vtable** · same file
+One function pointer and one `switch`, instead of one pointer per operation.
+*Buys:* smaller objects, and the compiler sees every operation for a type
+together. `using enum` keeps the case labels readable.
+
+**Ownership mode as a policy enum** · same file
+`empty / dynamic / embedded / ref / cref` is orthogonal to the held type, so one
+wrapper covers value, reference and const-reference.
+*Watch:* copying an alias must copy the alias; a `cref` alias must refuse mutable
+access.
+
+**Two-pointer compile-time-bound delegate** · `entt/signal/delegate.hpp` ·
+`src/acpp/delegate.hpp`
+An untyped instance pointer plus a fixed-signature function pointer; the target
+arrives as a template parameter so the trampoline is a direct call.
+*Use when:* fixed callback tables, driver dispatch, interrupt-adjacent code, no
+heap. *Not when:* the wrapper must own the callable — a delegate owns nothing.
+*Deliberately no null check on call:* a branch per call to catch a programming
+error would defeat the point.
+
+**Benchmarking against optimiser interference** ·
+`modules/08-type-erasure/erasure_table.cpp`
+Choose every target at run time and pass every holder through
+`asm volatile("" : : "g"(p) : "memory")` before timing. Otherwise the compiler
+devirtualises the lot and the table measures the optimiser.
+*And:* report best **and** worst of N. On a shared vCPU the spread was larger
+than the differences between mechanisms, which is a result — it says the ranking
+is not established. Measured in `modules/08-type-erasure/NOTES.md`.
+
+**Local `std::function` inlines too** · same file
+At `-O2` gcc devirtualises a local `std::function` with a known target as
+completely as a delegate. The delegate's edge is size, no allocation, trivial
+copyability, and the absence of the empty-target check once the callable crosses
+a function boundary — not inlining a local.
+
+---
+
+## Module 9 — The Chase–Lev work-stealing deque
+
+**Chase–Lev deque** · `taskflow/core/wsq.hpp` · `src/acpp/wsq.hpp`
+One owner pushes and pops at the bottom (LIFO, cache-warm); many thieves steal
+from the top (FIFO, coarse-grained, far from the owner's working set). Free-
+running `int64` counters, a power-of-two buffer, and a CAS on `top` as the only
+place the two sides meet.
+*Use when:* per-worker task queues in any scheduler.
+
+**The `seq_cst` fence is for store-load, and nothing weaker will do** · same file
+`bottom.store(relaxed); fence(seq_cst); top.load(relaxed);` — the fence stops the
+store being reordered after the load. `acq_rel` on a fence orders load-load,
+load-store and store-store but **not** store-load, which is the only ordering
+needed here.
+*Failure mode without it:* owner and thief both see an empty queue and the last
+task is lost, or both take it and it runs twice. Interleaving in
+`modules/09-work-stealing-deque/NOTES.md`.
+
+**A passing stress test on x86 is not evidence** · same NOTES
+The deliberately-weakened build passes 200,000 items with three thieves. x86-TSO
+plus a single core cannot produce the window. The written argument is the
+evidence; the test only catches regressions the machine can exhibit.
+
+**Relaxed justified by direction, not by speed** · same file
+`cached_top` is a monotonic lower bound on a counter that only increases, so a
+stale value can only overestimate occupancy — and overestimating costs one extra
+load, never a missed resize.
+*Use when:* you want to justify a relaxed load. The argument is always "here is
+why a stale value is harmless, in the direction it can be stale".
+
+**Cache-line isolation of contended atomics** · same file
+`alignas(64)` on `top`, `bottom` and the buffer pointer separately: the owner
+writes one, thieves write another, and sharing a line makes every steal attempt
+invalidate the owner's.
+
+**Retained-garbage reclamation** · same file
+A resized-away buffer cannot be freed — a thief may hold a pointer into it — so
+old buffers are retained until destruction.
+*Acceptable because:* each resize doubles, so the retained total is bounded by
+the final capacity and the count is log₂ of it. Measured: 6 resizes for 200,000
+items. The alternative is hazard pointers or epoch reclamation.
+
+**An uncontended mutex is not slow** · `modules/09-work-stealing-deque/NOTES.md`
+Single-threaded, the lock-free queue beat `std::mutex` + `std::deque` by only
+1.14×. A futex fast path is a couple of atomics. Expect the win from lock-free
+under *contention*, not from the uncontended path.

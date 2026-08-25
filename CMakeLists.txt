@@ -19,7 +19,7 @@ find_package(Threads REQUIRED)
 # Not a cache variable: it is a fact about the source, not a knob, and a cached
 # one would keep an old value across a re-configure -- which is precisely the
 # silent drift this check exists to prevent.
-set(ACPP_STL_MANIFEST_SIZE 188)
+set(ACPP_STL_MANIFEST_SIZE 200)
 
 # ---------------------------------------------------------------------------
 # src/ is the shared library the course builds up: Module 11's executor is made
