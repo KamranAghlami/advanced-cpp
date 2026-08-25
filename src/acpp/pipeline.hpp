@@ -90,11 +90,21 @@ public:
     /** Drive the pipeline to completion. Call from inside a runtime task. */
     void run(runtime &rt) {
         stl::atomic<stl::size_t> next_token{0u};
-        stl::atomic<bool> stopped{false};
+
+        // The stop point is a TOKEN, not a flag, and that distinction is a bug
+        // this file already had. With a bool, a line holding token 199 that was
+        // still queued for the *sink* when the source stopped at token 200
+        // would read `stopped == true` and skip its own sink stage -- dropping
+        // a token that was legitimately in flight. Only reproduces with real
+        // parallelism; a single core serialises the lines enough to hide it.
+        //
+        // With a token, the test is `token >= stop_token`, which is false for
+        // everything already in flight and true for everything after.
+        stl::atomic<stl::size_t> stop_token{no_stop};
 
         for(stl::size_t line = 0u; line < line_count; ++line) {
-            rt.silent_async([this, &next_token, &stopped, line] {
-                drive(next_token, stopped, line);
+            rt.silent_async([this, &next_token, &stop_token, line] {
+                drive(next_token, stop_token, line);
             });
         }
 
@@ -102,7 +112,7 @@ public:
     }
 
 private:
-    void drive(stl::atomic<stl::size_t> &next_token, stl::atomic<bool> &stopped,
+    void drive(stl::atomic<stl::size_t> &next_token, stl::atomic<stl::size_t> &stop_token,
                const stl::size_t line) {
         for(;;) {
             const auto token = next_token.fetch_add(1u, stl::memory_order_relaxed);
@@ -112,7 +122,7 @@ private:
             // when there is no longer any work to do. A token that returned
             // early would leave the stages after it waiting for a ticket value
             // that nobody would ever publish.
-            bool skip = stopped.load(stl::memory_order_acquire);
+            bool skip = token >= stop_token.load(stl::memory_order_acquire);
 
             pipeflow flow;
             flow.current_token = token;
@@ -147,8 +157,10 @@ private:
                     wait_for_ticket(stage, token);
 
                     // Re-read after waiting: the stream may have stopped while
-                    // this line was queued behind an earlier token.
-                    skip = skip || stopped.load(stl::memory_order_acquire);
+                    // this line was queued. Compared by TOKEN, so a token that
+                    // was already in flight when the stop happened is not
+                    // dropped part-way through the pipeline.
+                    skip = skip || (token >= stop_token.load(stl::memory_order_acquire));
                 }
 
                 if(!skip) {
@@ -158,7 +170,17 @@ private:
                         // The source says this is the end. This token stops
                         // here, but it still has to walk the remaining stages
                         // to advance their tickets.
-                        stopped.store(true, stl::memory_order_release);
+                        //
+                        // min, not store: two lines could both stop (a second
+                        // source call can only happen at a higher token, but
+                        // being explicit costs nothing and the invariant
+                        // "stop_token only decreases" is what makes the
+                        // comparison above monotone).
+                        auto current = stop_token.load(stl::memory_order_relaxed);
+                        while(token < current
+                              && !stop_token.compare_exchange_weak(current, token,
+                                                                   stl::memory_order_release,
+                                                                   stl::memory_order_relaxed)) {}
                         skip = true;
                     }
                 }
@@ -190,6 +212,8 @@ private:
             }
         }
     }
+
+    static constexpr stl::size_t no_stop = static_cast<stl::size_t>(-1);
 
     stl::vector<pipe> stages;
     stl::vector<stl::atomic<stl::size_t>> tickets;

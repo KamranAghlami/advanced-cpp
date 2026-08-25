@@ -222,6 +222,31 @@ The general shape: a busy-wait that is fine at one waiter per core is
 pathological at more, and a pipeline's whole point is having more lines than
 cores.
 
+## The bug only CI could find
+
+Everything above passed 25 consecutive runs on this machine and was TSan-clean.
+CI, on a four-core runner, failed immediately:
+
+```
+FAIL  the sink received every token exactly once
+```
+
+The stop point was a `bool`. A line holding token 199 that was still queued for
+the **sink** when the source stopped at token 200 read `stopped == true` and
+skipped its own sink stage — dropping a token that was legitimately in flight.
+
+On one core the lines serialise enough that a token is never far enough behind
+for this to happen. With real parallelism it happens on the first run.
+
+The fix is that the stop point is a **token**, not a flag: `token >= stop_token`
+is false for everything already in flight and true for everything after. Same
+number of atomics, and now the predicate says what was actually meant.
+
+Worth stating plainly, because it is the strongest single lesson in Phase C on
+this hardware: **a single-core machine cannot validate a concurrent design.** It
+can find protocol errors, and TSan can find races, and neither found this. What
+found it was a machine with more than one core running the test once.
+
 ## Exercise 4 — the closure wrapper
 
 The injection point: a user wraps every chunk in their own setup and teardown,

@@ -648,6 +648,13 @@ Two threads then drove one worker's deque and RNG.
 *Rule:* for "which worker am I", the answer is `thread_local`, never a field
 captured earlier.
 
+**And one only a four-core CI runner found:** the pipeline's stop point was a
+`bool`, so a token still queued for a later stage when the source stopped would
+skip that stage and be dropped. Fixed by making the stop point a *token*
+(`token >= stop_token`). Passed 25 local runs and TSan; failed CI's first run.
+*The lesson:* a single-core machine cannot validate a concurrent design. It
+finds protocol errors, TSan finds races, and neither finds this.
+
 **And one a stopwatch found:** the corun wait was an unbounded yield-spin, which
 is fine at one waiter per core and pathological above it — the pipeline test did
 not finish in 500 s under TSan. A **bounded** backoff (yield, then sleep 50 µs)
