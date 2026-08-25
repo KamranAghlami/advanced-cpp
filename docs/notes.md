@@ -97,3 +97,33 @@ Replace `#if`-driven policy with a trait keyed on a tag type: inferred default,
 inline opt-in, specialization override.
 *Use when:* a build flag is answering a question that different callers in the
 same build could legitimately answer differently.
+
+---
+
+## Module 3 — Layout economy
+
+**EBO with a disambiguating tag** · `entt/core/compressed_pair.hpp` ·
+`src/acpp/compressed_pair.hpp`
+A primary template that stores by value and a `requires is_ebco_eligible_v<Type>`
+specialization that inherits instead; a `size_t Tag` parameter makes two bases of
+the same empty type distinct types so the derivation is legal.
+*Use when:* storing a stateless allocator, deleter, comparator or hash.
+*Know that:* the tag buys legality, not size — two subobjects of the same type
+still need distinct addresses, so `pair<empty, empty>` is 2 bytes while
+`pair<empty, other_empty>` is 1. Measured in `modules/03-layout-economy/NOTES.md`.
+
+**`is_ebco_eligible_v`, not `is_empty_v`** · `entt/core/type_traits.hpp`
+An empty *final* class is still empty but cannot be inherited from.
+*Use when:* any time you are about to test `is_empty_v` in order to inherit.
+
+**`[[no_unique_address]]` as the alternative** · `src/acpp/compressed_pair.hpp`
+Far less code, and it compresses empty `final` types the inheritance version
+cannot. MSVC's ABI ignores the plain attribute and needs
+`[[msvc::no_unique_address]]`, which is why libraries still ship both.
+
+**Layout `static_assert` battery** · `modules/03-layout-economy/layout_assertions.cpp`
+State every size, alignment, `offsetof` and standard-layout assumption the code
+actually depends on, once, in code.
+*Use when:* always — it is what catches ABI drift when the toolchain moves.
+*Do not:* assert facts nothing depends on (`sizeof(void *)`), or the battery
+becomes something people delete instead of read.
