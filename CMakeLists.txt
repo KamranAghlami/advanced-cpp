@@ -19,7 +19,7 @@ find_package(Threads REQUIRED)
 # Not a cache variable: it is a fact about the source, not a knob, and a cached
 # one would keep an old value across a re-configure -- which is precisely the
 # silent drift this check exists to prevent.
-set(ACPP_STL_MANIFEST_SIZE 200)
+set(ACPP_STL_MANIFEST_SIZE 201)
 
 # ---------------------------------------------------------------------------
 # src/ is the shared library the course builds up: Module 11's executor is made
@@ -35,6 +35,13 @@ file(GLOB_RECURSE ACPP_SOURCES CONFIGURE_DEPENDS "src/acpp/*.cpp")
 add_library(acpp STATIC ${ACPP_SOURCES})
 target_include_directories(acpp PUBLIC "${PROJECT_SOURCE_DIR}/src")
 target_link_libraries(acpp PUBLIC Threads::Threads)
+
+# PUBLIC, so every exercise inherits them. The tree is clean under these today,
+# and the point of turning them on is that it stays that way -- a warning found
+# by somebody's IDE and not by CI is a warning that comes back.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_compile_options(acpp PUBLIC -Wall -Wextra)
+endif()
 # Hidden by default: the Module 1 ODR exercise is only honest if the project's
 # own default visibility is the one that causes the bug.
 set_target_properties(acpp PROPERTIES

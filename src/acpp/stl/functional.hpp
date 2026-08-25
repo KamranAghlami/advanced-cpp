@@ -15,6 +15,7 @@
 
 namespace acpp::stl {
 
+using std::function;
 using std::invoke;
 using std::reference_wrapper;
 using std::ref;
