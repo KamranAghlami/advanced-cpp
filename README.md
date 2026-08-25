@@ -55,7 +55,7 @@ every build rather than asserted once in prose.
 
 | # | Module | Status |
 |---|---|---|
-| 0 | Tooling setup | ✅ |
+| 0 | Tooling setup | ✅ [notes](modules/00-setup/NOTES.md) |
 | 1 | Type identity without RTTI | ✅ [notes](modules/01-type-identity/NOTES.md) |
 | 2 | Traits as an API surface | ✅ [notes](modules/02-traits/NOTES.md) |
 | 3 | Layout economy | ✅ [notes](modules/03-layout-economy/NOTES.md) |
@@ -107,7 +107,10 @@ reading:
   is no imbalance for a partitioner to fix.
 
 This machine has **one core**, so every concurrency measurement here reports `nproc`
-alongside it and none of them supports a scaling claim.
+alongside it and none of them supports a scaling claim. What that leaves open — and how to
+settle it on a multi-core box — is [`docs/pending-verification.md`](docs/pending-verification.md).
+Start with `./build/modules/00-setup/toolchain_report`, which prints the core count and fails
+if the atomics this repo assumes are not lock-free.
 
 ## CI
 

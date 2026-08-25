@@ -6,33 +6,23 @@
 // (Module 12).
 
 #include <atomic>
-#include <iostream>
 #include <numeric>
-#include <string_view>
 #include <thread>
 #include <vector>
+
+#include <acpp/testing.hpp>
 
 #include <taskflow/algorithm/for_each.hpp>
 #include <taskflow/taskflow.hpp>
 
-namespace {
-
-int failures = 0;
-
-void check(const bool ok, const std::string_view what) {
-    std::cout << (ok ? "  ok    " : "  FAIL  ") << what << '\n';
-    failures += static_cast<int>(!ok);
-}
-
-} // namespace
-
 int main() {
-    std::cout << "Taskflow " << TF_MAJOR_VERSION << '.' << TF_MINOR_VERSION << '.'
-              << TF_PATCH_VERSION << " (pinned c4da2a4)\n";
+    acpp::testing::suite suite{"module 00 / taskflow_smoke"};
+    suite.note("Taskflow %d.%d.%d (pinned c4da2a4)", TF_MAJOR_VERSION, TF_MINOR_VERSION,
+               TF_PATCH_VERSION);
 
     tf::Executor executor;
-    std::cout << "  executor.num_workers() = " << executor.num_workers()
-              << ", hardware_concurrency = " << std::thread::hardware_concurrency() << '\n';
+    suite.note("executor.num_workers() = %zu, hardware_concurrency() = %u", executor.num_workers(),
+               std::thread::hardware_concurrency());
 
     // Module 11: a diamond. B and C both decrement D's join counter; whoever
     // drives it to zero schedules D. Recording the order proves the dependency
@@ -48,9 +38,9 @@ int main() {
 
     executor.run(flow).wait();
 
-    check(order[0] == 0, "root task ran first");
-    check(order[3] == 3, "join task ran last");
-    check(order[1] != order[2], "the two middle tasks got distinct stamps");
+    suite.check(order[0] == 0, "root task ran first");
+    suite.check(order[3] == 3, "join task ran last");
+    suite.check(order[1] != order[2], "the two middle tasks got distinct stamps");
 
     // Module 12: parallel_for over the default partitioner. Correctness only --
     // any timing claim on this machine would be worthless (check nproc).
@@ -62,7 +52,7 @@ int main() {
     executor.run(loop).wait();
 
     const long long sum = std::accumulate(data.begin(), data.end(), 0LL);
-    check(sum == 10'000LL * 9'999LL, "for_each doubled every element exactly once");
+    suite.check(sum == 10'000LL * 9'999LL, "for_each doubled every element exactly once");
 
     // Module 12: corun -- a worker that needs a nested graph finished executes it
     // itself rather than parking. Writing `executor.run(inner).wait()` here would
@@ -78,8 +68,7 @@ int main() {
     outer.emplace([&] { executor.corun(inner); });
     executor.run(outer).wait();
 
-    check(nested.load() == 100, "corun executed the nested graph to completion");
+    suite.check(nested.load() == 100, "corun executed the nested graph to completion");
 
-    std::cout << (failures == 0 ? "taskflow_smoke: PASS\n" : "taskflow_smoke: FAIL\n");
-    return failures == 0 ? 0 : 1;
+    return suite.report();
 }
