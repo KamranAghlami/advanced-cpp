@@ -66,6 +66,15 @@
 // __STDCPP_THREADS__ and lets a caller disagree per counter. ACPP_NO_ATOMIC
 // still moves the default; it no longer *is* the policy. See counter.hpp.
 
+// Cache line size, for the alignas that keeps contended atomics apart
+// (Modules 9-11). Hard-coded rather than
+// std::hardware_destructive_interference_size, which GCC warns about using
+// across an ABI boundary and which is 64 on every target this project builds
+// for. If that stops being true, this is the one line to change.
+#ifndef ACPP_CACHELINE_SIZE
+#    define ACPP_CACHELINE_SIZE 64
+#endif
+
 // Storage tunables (Modules 2, 6, 7). Page sizes must be powers of two: the
 // paged indirection replaces a division with a shift and a mask, and both the
 // sparse array and the payload assert it at compile time.

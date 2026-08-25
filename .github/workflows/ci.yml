@@ -55,7 +55,6 @@ jobs:
   sanitizers:
     name: sanitizer / ${{ matrix.san.name }}
     runs-on: ubuntu-24.04
-    # The TSan leg is informational for now -- see the comment on its matrix entry.
     continue-on-error: ${{ matrix.san.informational }}
     strategy:
       fail-fast: false
@@ -64,13 +63,13 @@ jobs:
           - name: asan-ubsan
             flags: -fsanitize=address,undefined -fno-omit-frame-pointer -g
             informational: false
-          # Informational until Phase C: the only threaded code in the tree today
-          # is Taskflow's own lock-free internals, which we did not write, so a
-          # report here says nothing about our code. Flip `informational` to false
-          # once Module 9's queue lands in src/.
+          # Blocking as of Module 9: src/acpp/wsq.hpp is our own lock-free code,
+          # so a TSan report here is about us. Phase C's ground rule is that
+          # nothing concurrent is believed until it is TSan-clean, and leaving
+          # this informational would quietly defeat it.
           - name: tsan
             flags: -fsanitize=thread -fno-omit-frame-pointer -g
-            informational: true
+            informational: false
     steps:
       - uses: actions/checkout@v4
 
@@ -99,8 +98,11 @@ jobs:
       - name: Lower ASLR entropy
         run: sudo sysctl -w vm.mmap_rnd_bits=28 || true
 
+      # -LE measurement: the template-instantiation-depth probe compiles the same
+      # TU dozens of times to bisect a bound. It is a measurement, not a
+      # pass/fail signal, and it is minutes of work under a sanitizer.
       - name: Test
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
           TSAN_OPTIONS: halt_on_error=1
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure -LE measurement

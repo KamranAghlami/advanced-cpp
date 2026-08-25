@@ -111,10 +111,12 @@ manual dispatch:
 - **build** — gcc × clang × C++20 × C++23, then `ctest`.
 - **sanitizers** — clang, ASan+UBSan blocking and TSan `continue-on-error`.
 
-The TSan leg is informational **only because there is no concurrent code of ours yet** — the
-only threaded code in the tree is Taskflow's own lock-free internals. Flip
-`informational: false` on that matrix entry when Module 9's queue lands in `src/`; leaving it
-informational past that point would quietly defeat the Phase C ground rules.
+The TSan leg became **blocking** with Module 9, when `src/acpp/wsq.hpp` landed — the first
+lock-free code of ours in the tree. Leaving it informational past that point would have
+quietly defeated the Phase C ground rules.
+
+Both sanitizer legs skip `-L measurement`: the template-depth probe compiles one TU dozens
+of times to bisect a bound, which is minutes under a sanitizer and is not a pass/fail signal.
 
 Both sanitizer legs need `vm.mmap_rnd_bits=28` (the workflow sets it) for the same ASLR reason
 described below.
