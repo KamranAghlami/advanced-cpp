@@ -648,6 +648,17 @@ Two threads then drove one worker's deque and RNG.
 *Rule:* for "which worker am I", the answer is `thread_local`, never a field
 captured earlier.
 
+**A lost wakeup inside the lost-wakeup fix** · `src/acpp/notifier.hpp`
+`park()` wrote `state = waiting` on entry, erasing a signal that arrived between
+the CAS publishing the waiter and this thread taking its mutex. The 2PC closes
+the window between "I checked" and "I registered"; this reopened one between "I
+registered" and "I slept".
+*Rule:* state a waiter publishes must not be re-initialised after it becomes
+reachable — clear it before publishing, and let the park only read.
+*And:* **TSan cannot see this.** Every access is under the mutex, so there is no
+data race; it is a protocol error. TSan-clean is necessary and nowhere near
+sufficient.
+
 **And one only a four-core CI runner found:** the pipeline's stop point was a
 `bool`, so a token still queued for a later stage when the source stopped would
 skip that stage and be dropped. Fixed by making the stop point a *token*

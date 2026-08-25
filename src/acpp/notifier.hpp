@@ -195,8 +195,7 @@ class nonblocking_notifier {
     };
 
     static constexpr unsigned not_signaled = 0u;
-    static constexpr unsigned waiting = 1u;
-    static constexpr unsigned signaled = 2u;
+    static constexpr unsigned signaled = 1u;
 
 public:
     static constexpr stl::uint64_t stack_bits = 16u;
@@ -267,7 +266,15 @@ public:
 
     void commit_wait(const stl::size_t id) {
         auto *self = &waiters[id];
-        self->state = not_signaled;
+
+        // Under the waiter's own mutex, and BEFORE this waiter is published on
+        // the stack. Once the CAS below makes it reachable, any notifier may
+        // set `signaled` at any moment -- including before this thread reaches
+        // park(). Clearing the flag afterwards would erase that signal.
+        {
+            const std::lock_guard guard{self->mutex};
+            self->state = not_signaled;
+        }
 
         const auto ticket = ticket_of(self->epoch);
         auto current = state.load(stl::memory_order_seq_cst);
@@ -371,10 +378,23 @@ private:
         }
     }
 
+    /**
+     * Park until signalled -- and do NOT write the state on the way in.
+     *
+     * The first version set `state = waiting` here, which is a lost wakeup with
+     * real parallelism: a notifier can pop this waiter off the stack and set
+     * `signaled` in the window between the CAS that published it and this
+     * thread acquiring the mutex. Writing `waiting` then erases the signal and
+     * the wait never ends.
+     *
+     * It passed every local run and TSan on a single core, and hung CI's
+     * four-core runner. TSan cannot see it because there is no data race --
+     * every access is under the mutex. It is a protocol error, not a race.
+     */
     static void park(waiter *self) {
         std::unique_lock guard{self->mutex};
-        self->state = waiting;
         self->cv.wait(guard, [self] { return self->state == signaled; });
+        self->state = not_signaled;
     }
 
     static void unpark(waiter *target) {

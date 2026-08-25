@@ -160,6 +160,45 @@ bursty submission, every item consumed exactly once, several thousand real
 parks. The `parks > 0` assertion matters — without it a run where nobody ever
 slept would pass and prove nothing.
 
+## The lost wakeup inside the lost-wakeup fix
+
+`nonblocking_notifier` passed every local test, was TSan-clean, and **hung CI's
+four-core runner** — `notifier_protocol` timed out at 300 s where it takes 0.3 s
+here.
+
+The bug was in `park()`:
+
+```cpp
+static void park(waiter *self) {
+    std::unique_lock guard{self->mutex};
+    self->state = waiting;                                   // <-- erases a signal
+    self->cv.wait(guard, [self] { return self->state == signaled; });
+}
+```
+
+`commit_wait` publishes the waiter on the stack with a CAS, then calls `park()`.
+A notifier can pop that waiter and set `signaled` **in the window between the
+CAS and this thread acquiring the mutex**. Writing `waiting` on entry then erases
+the signal, and the wait never ends.
+
+It is the module's own bug, one level down: the two-phase commit closes the
+window between "I checked" and "I registered", and this reopened a window
+between "I registered" and "I slept".
+
+Two things worth taking from it:
+
+- **The fix is to not write state on the way in.** Clear `not_signaled` under
+  the mutex *before* publishing, and let `park` only read. State a waiter
+  publishes must not be re-initialised after it becomes reachable.
+- **TSan cannot see this.** Every access is under the waiter's mutex, so there
+  is no data race — it is a *protocol* error. Phase C's ground rule is that
+  concurrent code is TSan-clean before it is believed, and this is the reminder
+  that TSan-clean is necessary and nowhere near sufficient.
+
+And, again: a single-core machine cannot validate a concurrent design. The
+window here is a handful of instructions wide, and one core essentially never
+lands inside it.
+
 ## Exercise 5 — idle CPU, and a result the course does not predict
 
 Bursty load: 12 bursts of 40 items with 25 ms of idle between them, 4 workers.
