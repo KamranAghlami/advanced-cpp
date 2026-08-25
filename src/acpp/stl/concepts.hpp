@@ -15,7 +15,11 @@
 
 namespace acpp::stl {
 
+using std::floating_point;
+using std::integral;
 using std::same_as;
+using std::signed_integral;
+using std::unsigned_integral;
 using std::convertible_to;
 using std::derived_from;
 using std::constructible_from;

@@ -130,13 +130,21 @@ cmake -S third_party/taskflow -B third_party/taskflow/build -DTF_BUILD_TESTS=ON 
 
 | Tool | Status |
 |---|---|
-| `g++` 13.3 (Ubuntu 24.04), `cmake` 3.28.3, `ninja`, `perf` | available |
+| `g++` 13.3 (Ubuntu 24.04), `cmake` 3.28.3, `ninja` | available |
+| `clang++` 18.1.3 | available (installed 2026-08-25, during Module 2) |
+| `valgrind` 3.22 / `cachegrind` | available (same) — needs `--cache-sim=yes`, which is off by default |
 | ASan + UBSan (`-fsanitize=address,undefined`) | works |
-| **TSan** (`-fsanitize=thread`) | two caveats, both verified — see below |
-| `clang++` / `clang-tidy` / `-ftime-trace` | **not installed** — the course's `-ftime-trace` instructions (Modules 2, 8) need clang |
-| `valgrind` / `cachegrind` | **not installed** — cache modelling exercises (Module 6) need it, or use `perf stat -e cache-misses` |
+| **TSan** (`-fsanitize=thread`) | works under clang; two caveats under gcc — see below |
+| `perf stat` | **installed but unusable**: `perf_event_paranoid` is 4, so CPU event access needs `CAP_PERFMON`. Use cachegrind (deterministic, and what Module 6 used). |
 | `gdb` / `lldb` | **not installed** |
 | Google Benchmark, Catch2 | **not installed** — fetch via CMake `FetchContent` when a module needs them |
+
+`scripts/verify.sh` runs the CI matrix (gcc/clang x C++20/23) plus the ASan/UBSan
+and TSan legs locally. Run it before pushing: a single-compiler local build has
+already missed two real bugs (a dangling range-for temporary in Module 1, a
+raw-pointer iterator in Module 4). Do not run it concurrently with another build
+of this project — every build tree shares `third_party/`, and FetchContent will
+wipe and re-clone it underneath the other one.
 
 ### TSan caveats (Phase C blockers)
 

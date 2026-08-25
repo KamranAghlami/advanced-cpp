@@ -16,7 +16,10 @@ find_package(Threads REQUIRED)
 # Module 4. The number of distinct std:: names src/acpp/stl re-exports -- the
 # library's complete dependency on the standard library, pinned so that adding
 # one is a visible decision. Checked by the `stl_manifest` test.
-set(ACPP_STL_MANIFEST_SIZE 183 CACHE STRING "expected size of the src/acpp/stl dependency manifest")
+# Not a cache variable: it is a fact about the source, not a knob, and a cached
+# one would keep an old value across a re-configure -- which is precisely the
+# silent drift this check exists to prevent.
+set(ACPP_STL_MANIFEST_SIZE 187)
 
 # ---------------------------------------------------------------------------
 # src/ is the shared library the course builds up: Module 11's executor is made

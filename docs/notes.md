@@ -198,3 +198,53 @@ generation without a branch.
 `conditional_t<is_enum_v<T>, underlying_type_t<T>, T>` is a hard error for
 non-enums: both branches are evaluated. A constrained partial specialization
 (`underlying_or_self`) is the fix.
+
+---
+
+## Module 6 — The sparse set
+
+**Paged sparse array** · `entt/entity/sparse_set.hpp` · `src/acpp/sparse_set.hpp`
+The sparse array is a vector of fixed-size pages allocated on first touch, not
+one flat array.
+*Why:* it is indexed by entity *id*, which can be arbitrarily spread out. A flat
+array sized to the largest id wastes memory catastrophically; paging bounds the
+waste to one page.
+*Note:* this is a **memory** argument. Module 7 pages the *payload* for a
+completely different reason (pointer stability), and conflating the two is the
+easiest mistake to make here.
+
+**`fast_mod` with a power-of-two assert** · `entt/core/bit.hpp` · `src/acpp/bit.hpp`
+`value & (mod - 1)`, with `has_single_bit(mod)` checked at compile time.
+*Use when:* any time a size is a power of two by construction — say so in the
+code, because the arithmetic is silently wrong otherwise.
+
+**Intrusive free list in tombstoned slots** · `entt/entity/sparse_set.hpp`
+A freed slot stores the index of the previously freed slot in its entity bits and
+the tombstone in its version bits; `head` points at the most recent hole.
+*Use when:* you need a free list over fixed-size slots and the slots are big
+enough to hold an index. Costs zero extra memory.
+*Depends on:* a sentinel that compares on one field only (Module 5) — otherwise a
+slot cannot both carry an index and read as dead.
+
+**Partitioned array as a free list (`swap_only`)** · same file
+Partition at `head`: live below, released above. Release swaps up, recycle swaps
+down.
+*Use when:* elements are never really destroyed, only deactivated — sessions,
+entity ids, slot-based resources. Recycling needs no separate structure at all.
+
+**Branchless policy dispatch** · same file
+`max_size * (mode != swap_only)` instead of a ternary, because the two things
+`head` denotes are complementary.
+
+**Private-virtual (NVI) seam** · same file
+The base owns the algorithm and calls private virtuals for the one step it cannot
+know; the derived class implements them.
+*Use when:* a type-erased base must reorder elements whose payload type it does
+not know. `virtual_seam.cpp` erases from an `int` pool and a `string` pool
+through the same base pointer.
+
+**Contiguous iteration beats node-based, in cache lines** ·
+`modules/06-sparse-set/NOTES.md`
+Measured: 5.6× wall clock over `std::unordered_map` at 1M elements, from 2.5×
+fewer D1 read misses (cachegrind) plus the fact that the map's misses are
+*dependent* loads the prefetcher cannot hide.

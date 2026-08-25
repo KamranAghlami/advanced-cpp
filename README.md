@@ -61,7 +61,7 @@ every build rather than asserted once in prose.
 | 3 | Layout economy | ✅ [notes](modules/03-layout-economy/NOTES.md) |
 | 4 | The freestanding shim | ✅ [notes](modules/04-freestanding-shim/NOTES.md) |
 | 5 | Bit-packed handles | ✅ [notes](modules/05-handles/NOTES.md) |
-| 6 | The sparse set | |
+| 6 | The sparse set | ✅ [notes](modules/06-sparse-set/NOTES.md) |
 | 7 | Storage & view iteration | |
 | 8 | Type erasure, three ways | |
 | 9 | Chase–Lev work-stealing deque | |
