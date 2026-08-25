@@ -31,23 +31,29 @@ Build against the libraries' actual floor with `-DCMAKE_CXX_STANDARD=20`; the de
 ## Layout
 
 ```
-CMakeLists.txt            root: dependencies, acpp_exercise(), enable_testing()
+CMakeLists.txt            root: dependencies, acpp_exercise(), acpp_asm_probe()
 cmake/dependencies.cmake  FetchContent pins for EnTT + Taskflow
-src/                      shared code the later modules build on
-modules/NN-slug/          per-module exercises, one executable each
+cmake/check_asm.cmake     pattern-checks one function's -O2 assembly
+src/acpp/                 the library the modules build up, linked as `acpp`
+modules/NN-slug/          per-module exercises + NOTES.md, one executable each
 docs/                     the course, the project guide, notes, memory
 third_party/              gitignored; the two reference checkouts
 ```
 
 The course is cumulative — Module 11's executor is assembled from Module 9's queue and Module
-10's notifier — so anything a later module reuses lives in `src/`.
+10's notifier — so anything a later module reuses lives in `src/acpp/`.
+
+The course repeatedly asks for claims to be checked on Compiler Explorer. Since CI has no
+Compiler Explorer, the claims that matter are compiled to assembly at `-O2` by
+`acpp_asm_probe()` and pattern-checked by `cmake/check_asm.cmake`, so they are re-verified on
+every build rather than asserted once in prose.
 
 ## Progress
 
 | # | Module | Status |
 |---|---|---|
 | 0 | Tooling setup | ✅ |
-| 1 | Type identity without RTTI | |
+| 1 | Type identity without RTTI | ✅ [notes](modules/01-type-identity/NOTES.md) |
 | 2 | Traits as an API surface | |
 | 3 | Layout economy | |
 | 4 | The freestanding shim | |
