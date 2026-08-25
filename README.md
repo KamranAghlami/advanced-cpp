@@ -65,13 +65,49 @@ every build rather than asserted once in prose.
 | 7 | Storage & view iteration | ✅ [notes](modules/07-storage-and-views/NOTES.md) |
 | 8 | Type erasure, three ways | ✅ [notes](modules/08-type-erasure/NOTES.md) |
 | 9 | Chase–Lev work-stealing deque | ✅ [notes](modules/09-work-stealing-deque/NOTES.md) |
-| 10 | Sleeping without lost wakeups | |
-| 11 | Scheduler & graph representation | |
-| 12 | Parallel algorithm design | |
-| ★ | Capstone | |
+| 10 | Sleeping without lost wakeups | ✅ [notes](modules/10-notifier/NOTES.md) |
+| 11 | Scheduler & graph representation | ✅ [notes](modules/11-scheduler/NOTES.md) |
+| 12 | Parallel algorithm design | ✅ [notes](modules/12-parallel-algorithms/NOTES.md) |
+| ★ | Capstone — reactive dataflow engine | ✅ [notes](modules/13-capstone/NOTES.md) · [design](docs/design.md) |
 
 Done means the [Appendix C](docs/advanced-cpp-via-entt-and-taskflow.md#appendix-c--self-assessment)
-checklist, not "it compiles."
+checklist, not "it compiles." Where each item is answered:
+
+| Appendix C item | Answered in |
+|---|---|
+| Why `type_index` needs visibility control across shared objects | [M1](modules/01-type-identity/NOTES.md) — plus a finding the course text does not mention |
+| The three-level customization ladder, from memory | [M2](modules/02-traits/NOTES.md) |
+| The exact code that breaks a tag-less `compressed_pair` | [M3](modules/03-layout-economy/NOTES.md) — compiled, and required to fail |
+| The standard-library surface a nontrivial library actually needs | [M4](modules/04-freestanding-shim/NOTES.md) — 154 names, and the shape is the surprise |
+| A bit split for a generational handle, given live-count and churn | [M5](modules/05-handles/NOTES.md) — 24/40, with the arithmetic |
+| A sparse set with holes, including tombstone contents | [M6](modules/06-sparse-set/NOTES.md) |
+| Paged sparse vs paged payload — different motivations | [M7](modules/07-storage-and-views/NOTES.md) |
+| `std::function` vs delegate vs virtual vs raw pointer | [M8](modules/08-type-erasure/NOTES.md) — three follow-up questions |
+| Every memory order in Chase–Lev `pop` and `steal` | [M9](modules/09-work-stealing-deque/NOTES.md) — all four questions, in writing |
+| The lost-wakeup window and the instruction that closes it | [M10](modules/10-notifier/NOTES.md) — two-column timeline |
+| A task node's full lifecycle, with every atomic named | [M11](modules/11-scheduler/NOTES.md) |
+| Load imbalance from the wrong partitioner | [M12](modules/12-parallel-algorithms/NOTES.md) — and why this machine cannot test it |
+
+## What the measurements actually said
+
+Several results contradict what the course text predicts, and those are the ones worth
+reading:
+
+- **Module 8** — "delegates inline, `std::function` does not" is false for a local
+  `std::function` at `-O2`; gcc devirtualises both. The delegate's edge is size, allocation
+  and the absent empty-target check.
+- **Module 11** — `std::visit` compiled to *fewer* instructions than switch-on-index, because
+  it is exhaustive by construction and emits no `default` case.
+- **Module 9** — the deliberately-weakened memory order *passes* the stress test. A green
+  test on x86 is not evidence that a memory order is correct.
+- **Module 10** — spinning costs ~79× the idle CPU of any sleeping strategy, but the
+  two-phase notifier did **not** beat a condvar on idle CPU; its advantage needs a lock-free
+  push path to appear at all.
+- **Module 12** — the partitioner prediction is untested, not disproved: with one core there
+  is no imbalance for a partitioner to fix.
+
+This machine has **one core**, so every concurrency measurement here reports `nproc`
+alongside it and none of them supports a scaling claim.
 
 ## CI
 

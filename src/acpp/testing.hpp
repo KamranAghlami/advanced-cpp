@@ -16,6 +16,11 @@ class suite {
 public:
     explicit suite(const std::string_view name) noexcept
         : label{name} {
+        // Unbuffered, deliberately. A test that hangs must still show how far
+        // it got -- with the default block buffering on a pipe, a hung test
+        // reports absolutely nothing, which is the least useful failure mode a
+        // test harness has. Phase C made this non-negotiable.
+        std::setvbuf(stdout, nullptr, _IONBF, 0);
         std::printf("%.*s\n", static_cast<int>(label.size()), label.data());
     }
 
@@ -26,10 +31,22 @@ public:
     }
 
     // For the measurement exercises: recorded in the log, never pass/fail.
-    template<typename... Args>
-    void note(const char *fmt, Args... args) noexcept {
+    //
+    // Two overloads, because one is not enough. `printf(fmt)` with a non-literal
+    // format and no arguments is what -Wformat-security exists to catch: if
+    // `fmt` ever came from anywhere but a literal, a stray %s reads whatever is
+    // in the argument registers. The no-argument case therefore goes through
+    // "%s" and never treats its input as a format at all.
+    void note(const char *text) noexcept {
+        std::printf("  ....  %s\n", text);
+    }
+
+    template<typename Arg, typename... Args>
+    void note(const char *fmt, Arg first, Args... rest) noexcept {
         std::printf("  ....  ");
-        std::printf(fmt, args...);
+        // NOLINTNEXTLINE(cert-err33-c) -- diagnostics; a short write is not
+        // worth handling in a test harness.
+        std::printf(fmt, first, rest...);
         std::printf("\n");
     }
 

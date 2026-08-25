@@ -405,3 +405,213 @@ items. The alternative is hazard pointers or epoch reclamation.
 Single-threaded, the lock-free queue beat `std::mutex` + `std::deque` by only
 1.14×. A futex fast path is a couple of atomics. Expect the win from lock-free
 under *contention*, not from the uncontended path.
+
+---
+
+## Module 10 — Sleeping without lost wakeups
+
+**Two-phase commit wait** · `taskflow/core/nonblocking_notifier.hpp` ·
+`src/acpp/notifier.hpp`
+`prepare_wait(id)` → re-check the predicate → exactly one of `cancel_wait(id)` or
+`commit_wait(id)`. The announcement is published *before* the re-check, so a
+notify arriving after the check still finds somebody to tell.
+*Use when:* any worker pool that sleeps. This is the bug every thread-pool author
+meets once.
+*The instruction that closes the window* is the `fetch_add` in `prepare_wait`
+plus the `seq_cst` fence after it — without the fence the announcement can sit in
+a store buffer while the predicate load has already retired, which is the same
+store-load problem as Module 9's `pop`.
+*The rule:* one `prepare_wait`, exactly one resolution. Trace every exit path.
+
+**Packed atomic state word** · same file
+`[epoch:32][prewaiters:16][stack:16]` in one `uint64_t`, with the increments
+placed so `state - prewaiter_inc + epoch_inc` updates two fields in one CAS.
+*Max workers:* 65,534 — 16 stack bits minus the all-ones "empty" sentinel. The
+constructor throws rather than aliasing, because the failure is a hang.
+
+**An epoch that is both an ABA defence and a ticket** · same file
+Bumped by every CAS that resolves a request, so a stale read cannot win; and
+`epoch - recorded` tells a pre-waiter whether its turn has arrived, passed, or
+not yet come — serialising resolutions in arrival order without a lock.
+*Wraps harmlessly* because every comparison is a signed difference of two nearby
+epochs.
+*Note the deliberate omission:* popping the waiter stack does **not** bump the
+epoch, because a waiter can only be re-pushed after passing through pre-wait,
+which always does.
+
+**Reproduce the race, do not wait for it** · `modules/10-notifier/lost_wakeup.cpp`
+Block the sleeping thread on a handshake until the pusher has finished, so the
+losing interleaving happens every run. Measured: the naive worker sleeps 50.8 ms
+with work queued, and only wakes because `wait_for` has a timeout.
+*Use when:* any race worth fixing. One-in-a-week is a mystery; one-in-every-run
+is a bug.
+
+**Idle CPU: spinning is the outlier, not the notifier** ·
+`modules/10-notifier/NOTES.md`
+Measured over a bursty load: spin 0.259 s CPU, 2PC 0.0033 s, condvar-per-push
+0.0015 s, for identical throughput. Spinning costs ~79×.
+*And the honest half:* 2PC did **not** beat condvar-per-push on idle CPU here,
+because the harness gives all three the same locked queue. The advantage it is
+built for — no synchronisation on push when nobody sleeps — needs a lock-free
+push path to show up at all.
+
+**`printf(fmt)` with no arguments is a security warning, not a style one** ·
+`src/acpp/testing.hpp`
+`-Wformat-security` fires on a non-literal format with no arguments. Split the
+zero-argument case into an overload that goes through `"%s"`.
+
+---
+
+## Module 11 — Scheduler and graph representation
+
+**Variant nodes** · `taskflow/core/graph.hpp` · `src/acpp/graph.hpp`
+Heterogeneous node kinds in one type: no inheritance, no per-node heap
+indirection. Cost is `sizeof` = max over alternatives plus a discriminator.
+*Measured:* when every alternative holds a `std::function` they are all the same
+size, so the variant costs nothing for heterogeneity — all of it is
+type-erased-callable tax.
+*And:* the largest member of a task node turned out to be the **edge vector**,
+not the variant. Measure before proposing a shrink.
+
+**Partitioned successor/predecessor vector** · same file
+One vector split at `num_successors`: push back, swap into the boundary, bump
+the boundary. O(1), one allocation, one cache line at typical fan-out.
+*Removal* needs two moves, not one, to keep both halves contiguous.
+
+**Small vector with inline capacity** · `src/acpp/small_vector.hpp`
+N elements inside the object, heap only beyond.
+*Justified by:* the distribution of sizes, not by "vectors are slow". Most task
+nodes have ≤4 edges, so most graphs allocate nothing for topology.
+
+**Atomic join counters** · `taskflow/core/graph.hpp`
+Each node holds `atomic<size_t>`; on completion a task decrements each
+successor's, and whoever drives one to zero owns scheduling it. No locks, no
+central scheduler state.
+*The reset problem:* a graph that runs twice needs its counters restored — do it
+in `run()`, before anything is scheduled, which is the only moment no worker can
+be looking.
+
+**Count scheduled nodes, not total nodes** · `src/acpp/executor.hpp`
+A completion counter initialised to the node count hangs on any graph containing
+a condition, because a condition leaves branches unrun. Raise the counter when a
+successor becomes ready, lower it when a node finishes — and raise before the
+predecessor's own decrement so it cannot transiently hit zero.
+
+**State split by who touches it** · `src/acpp/graph.hpp`
+One plain word for fields only the owning thread reads, one atomic for the rest.
+*And pack the refcount into the atomic's spare bits:* not fewer RMWs, but **one
+atomic object instead of two** — one cache line bouncing between cores instead of
+two, and a word saved per node. Cost is a stated cap on the count.
+
+**Direct continuation via an invoke cache** · `src/acpp/executor.hpp`
+A finishing task with exactly one ready successor runs it directly: no push, no
+pop, no chance of a steal. Queue traffic only at fan-out.
+*Measured:* a 200-link chain runs with 199 continuations and 0 steals.
+
+**Cross-thread exception propagation** · same file
+Capture the **first** `exception_ptr`, count the rest, cancel the graph, rethrow
+from `wait()` on the calling thread.
+*Watch:* cancellation must skip the work, not the bookkeeping, or a cancelled
+graph never finishes; `wait()` must rethrow once, not re-arm; and the
+`catch(...)` around the invoke is what stops a throw unwinding a worker out of
+the pool.
+
+**Sticky victim stealing** · `taskflow/core/executor.hpp`
+Remember who you last stole from and try them first.
+*Measured:* 23% fewer steal attempts, success rate 14.5% → 19.8% on a
+pipeline-shaped graph.
+
+**Sampling from a set minus one element** · same file
+`v = rand() % (N-1); if(v >= self) ++v;` — one modulo, one predicated increment,
+no rejection loop and therefore no unbounded worst case. Total for `N >= 2`.
+
+**`std::visit` is not obviously worse than switch-on-index** ·
+`modules/11-scheduler/NOTES.md`
+Measured, gcc 13.3 `-O2`, 4 alternatives: visit 22 instructions, switch 27,
+if-else 27. `visit` is exhaustive by construction, so it emits no `default` case.
+The real reasons to prefer the switch are structural (a dedicated function per
+kind), not codegen.
+
+---
+
+## Module 12 — Parallel algorithm design
+
+**Contract enum vs strategy class** · `taskflow/algorithm/partitioner.hpp` ·
+`src/acpp/partitioner.hpp`
+Four partitioner classes, two enum values: the enum encodes the *scheduling
+contract* the algorithm must branch on (pre-assigned ranges vs a shared cursor);
+the class encodes the *chunk-sizing strategy*, which never leaves `loop()`.
+*Use when:* you have two customization axes and only one of them belongs in the
+skeleton. Adding a strategy then costs nothing; adding a contract costs a rewrite.
+
+**Partitioner as a defaulted template policy** · same file
+The common case costs nothing at the call site and the specialist case needs no
+library change. `sizeof(dynamic_partitioner<>) == sizeof(size_t)`.
+
+**A tag type, not `void`, for "no policy"** · same file
+`Closure = void` makes a member taking `Closure` ill-formed at *class*
+instantiation, and a `requires` clause cannot rescue it. An empty tag type with a
+call operator costs nothing under `[[no_unique_address]]`.
+
+**Guided needs a CAS where dynamic needs a `fetch_add`** · same file
+The size of a guided claim depends on what is left, so it must be computed from a
+value and committed against that same value. That is the structural difference,
+and it is why guided pays more per chunk and wins only when the tail is uneven.
+
+**Closure wrapper injection point** · same file
+The user wraps every chunk in their own setup/teardown — a thread-local scratch,
+NUMA pinning, a profiling scope — and the algorithm never learns about it.
+*Caveat:* the wrapper must be at namespace scope. A local class cannot have
+member templates; gcc allows it as an extension, clang does not.
+
+**Cooperative blocking (`corun`)** · `taskflow/core/runtime.hpp` ·
+`src/acpp/executor.hpp`
+A worker that must wait for nested work re-enters the scheduling loop with a
+completion predicate instead of blocking, so it spends the wait executing the
+work it is waiting for.
+*Without it:* W outer tasks each blocking on nested work deadlock a W-worker
+pool. Reproduced in `modules/12-parallel-algorithms/corun_deadlock.cpp`.
+*Two properties that make it a fix:* it must never park, and it must nest.
+*And:* join implicitly, in the invoke path — forgetting to join is the whole
+failure mode, so it should not be something a user can forget.
+
+**Lock-free serial pipeline stages** · `taskflow/algorithm/pipeline.hpp` ·
+`src/acpp/pipeline.hpp`
+A per-stage atomic ticket: a serial stage admits token `t` only when its counter
+reads `t`, and publishes `t+1` on the way out. A release/acquire handoff between
+two tokens, not mutual exclusion.
+*The invariant that makes it terminate:* every claimed token walks every stage
+and advances every ticket, even after the stream has stopped. Returning early
+leaves later stages waiting for a value nobody will publish.
+*And:* a line waiting for its ticket coruns rather than blocking.
+
+---
+
+## Capstone — reactive dataflow
+
+**Partial topological execution** · `src/acpp/dataflow.hpp`
+Dirty only the transitive dependents of what changed; recompute only those, with
+edges only between cells that are *both* dirty.
+*That last clause is the whole design:* an edge to a clean cell drags it, and its
+inputs, back into the recomputation.
+*Measured:* 15.3× over full recomputation when 27% of the graph is affected,
+1.23× when 72% is. The benefit is the reciprocal of the affected fraction.
+
+**A sparse set is the right dirty set** · same file
+Needs O(1) membership (for the marking early-out and the edge filter) *and* dense
+iteration (to build one task per dirty cell). A `std::set` gives the second
+badly; a `bool` per cell cannot give the second at all.
+
+**Benchmarks that quietly measure nothing** ·
+`modules/13-capstone/NOTES.md`
+Two versions of the dataflow benchmark produced plausible numbers while measuring
+nothing: "best of N" was won by passes where the update was a no-op, and some
+graph inputs had no dependents at all. A benchmark that crashes gets fixed; one
+that quietly measures nothing gets quoted.
+*Habit:* assert inside the measurement that the work actually happened.
+
+**Report the legs that isolate each effect** · same file
+`incremental-serial` vs `full-serial` isolates work avoided; `incremental-parallel`
+vs `incremental-serial` isolates parallel execution. Two legs instead of three
+would have shown a 15× win at one size and a loss at another, and explained
+neither.
