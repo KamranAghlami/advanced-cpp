@@ -190,5 +190,11 @@ int main() {
     suite.check(acpp::serialization_traits<pod>::stable_layout, "derived trait composes");
     suite.check(!acpp::serialization_traits<std::string>::stable_layout, "derived trait composes");
 
+    // And the level-3 specialization has to supply it too -- a specialization
+    // replaces the whole trait, not just the member you cared about, which is
+    // exactly what makes it the most invasive rung of the ladder.
+    suite.check(acpp::serialization_traits<legacy_blob>::stable_layout,
+                "a full specialization must restate every member");
+
     return suite.report();
 }
