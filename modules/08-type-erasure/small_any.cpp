@@ -53,8 +53,13 @@ static_assert(sizeof(any) == sizeof(double[2]) + 2u * sizeof(void *));
 // std::any is 16 bytes because it manages with one pointer and one manager
 // pointer and has no third field.
 static_assert(sizeof(acpp::shallow_any) == 3u * sizeof(void *));
-static_assert(sizeof(acpp::shallow_any) > sizeof(std::any),
-              "our ownership-mode field is not free; std::any has no equivalent");
+
+// NOT asserted against sizeof(std::any). That comparison was measuring the
+// standard library, not this code: libstdc++'s any is 16 bytes and libc++'s is
+// 32, for reasons to do with their small-buffer sizes and nothing to do with
+// our policy field. The claim worth making is the absolute one above -- three
+// words, one of which exists only to hold a byte -- and the comparison belongs
+// in the output, where a reader can see which library they are on.
 
 int live_counter = 0;
 
@@ -73,6 +78,9 @@ struct counted {
 
 int main() {
     acpp::testing::suite suite{"module 08 / small_any"};
+
+    suite.note("sizeof(shallow_any) = %zu, sizeof(std::any) = %zu (standard-library dependent)",
+               sizeof(acpp::shallow_any), sizeof(std::any));
 
     // --- the SBO decision ---------------------------------------------------
     {

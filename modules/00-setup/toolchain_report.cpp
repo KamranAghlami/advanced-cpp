@@ -102,13 +102,23 @@ int main() {
     // lock-free, and a "lock-free" queue backed by a hidden mutex would still
     // pass every test in this repo while invalidating every claim Module 9
     // makes about it. Worth failing loudly rather than measuring quietly.
-    suite.check(std::atomic<std::int64_t>{}.is_lock_free(),
+    //
+    // is_always_lock_free, NOT is_lock_free(). Three reasons, and the first is
+    // the one that broke a CI build:
+    //
+    //   * is_lock_free() is a runtime call into __atomic_is_lock_free, which
+    //     lives in libatomic. gcc links that implicitly; clang does not, so the
+    //     member function is an undefined reference at link time.
+    //   * is_always_lock_free is a static constexpr bool -- no call, no library.
+    //   * it is the stricter question. "Always, for this type on this target" is
+    //     what the queue needs; is_lock_free() only answers for one object.
+    suite.check(std::atomic<std::int64_t>::is_always_lock_free,
                 "atomic<int64_t> is lock-free (Module 9's top/bottom counters)");
-    suite.check(std::atomic<std::uint64_t>{}.is_lock_free(),
+    suite.check(std::atomic<std::uint64_t>::is_always_lock_free,
                 "atomic<uint64_t> is lock-free (Module 10's packed state word)");
-    suite.check(std::atomic<void *>{}.is_lock_free(),
+    suite.check(std::atomic<void *>::is_always_lock_free,
                 "atomic<T *> is lock-free (Module 9's buffer pointer, Module 10's waiter stack)");
-    suite.check(std::atomic<std::size_t>{}.is_lock_free(),
+    suite.check(std::atomic<std::size_t>::is_always_lock_free,
                 "atomic<size_t> is lock-free (Module 11's join counters)");
 
 #if defined __STDCPP_THREADS__

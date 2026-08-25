@@ -1,10 +1,30 @@
-# Pending verification — re-run these on a multi-core machine
+# Pending verification — what still needs other hardware
 
 **Status:** every module and the capstone is implemented, tested and CI-green.
 What is *not* settled is a set of **measurements**, because the machine they were
 taken on cannot produce the conditions they describe.
 
-**Read this first if you are the agent or person running on the 16-core box.**
+**Read this first if you are the agent or person running on another machine.**
+
+---
+
+## The machines, and what each one is actually for
+
+Two are available beyond the development box, and they are **not ranked** — they
+answer different questions, and the M1 answers one that no amount of x86 can.
+
+| Machine | Good for | Not for |
+|---|---|---|
+| **16-core x86 WSL2**, 32 GB | every throughput and scaling measurement; `perf`; the fastest full `verify.sh` | the memory-model question (x86-TSO hides it) |
+| **M1 MacBook Air (8 cores)** | **weak memory ordering** — the one thing x86 structurally cannot test; a second standard library (libc++); a different cache-line size | sustained benchmarking (fanless, it thermally throttles); cachegrind (unsupported on Apple Silicon); `perf` (does not exist) |
+| single vCPU droplet (this one) | nothing further | everything below |
+
+**If you only run one, run the M1 first.** The x86 box gives better numbers for
+things that already have plausible numbers. The M1 can find *bugs*, and bugs
+outrank numbers — see the next section for why that is not a hypothetical.
+
+Running both is better still, and they do not conflict: they write to different
+sections. See "Two machines at once" at the end.
 
 ---
 
@@ -28,13 +48,41 @@ of Phase C:
      stack and taking its mutex — a lost wakeup **inside** the lost-wakeup fix,
      which TSan cannot see because every access is under a mutex.
 
-If four cores found two bugs, sixteen may find more. That is the real reason for
-this exercise; the numbers are the secondary benefit.
+If four cores found two bugs, sixteen may find more — and **an ARM machine may
+find a different class entirely.** Every memory-order argument in Modules 9, 10
+and 11 was written against the C++ model and then tested only on x86-TSO, which
+provides most of that ordering in hardware whether or not you asked for it. A
+`relaxed` that should have been `acquire` costs nothing on x86 and corrupts on
+ARM. The repo has never once been run on a machine that could tell.
 
 `perf stat` is also unusable here (`perf_event_paranoid = 4`), so cache work went
-through cachegrind. WSL2 usually allows `perf`.
+through cachegrind. WSL2 usually allows `perf`; macOS has neither.
 
-## Before anything else
+## Setting up
+
+**WSL2 (x86):** the usual.
+
+```bash
+sudo apt-get install -y build-essential clang cmake ninja-build valgrind linux-tools-generic
+```
+
+**macOS (M1):** Homebrew, and note what is *missing*.
+
+```bash
+brew install cmake ninja llvm        # llvm optional; Apple clang is fine and is what ships
+```
+
+- No `valgrind` (unsupported on Apple Silicon) → Module 6's cachegrind numbers
+  cannot be re-taken there. Leave them alone.
+- No `perf` → use `xcrun xctrace` / Instruments if you want counters, or skip.
+- No `setarch` → not needed; `scripts/verify.sh` already skips it off Linux.
+- **libc++, not libstdc++.** That is a feature, not a problem — see the ARM
+  section.
+- The codegen assertions **auto-skip**: their patterns are x86-64 AT&T assembly
+  with ELF symbol names, and CMake prints a status line saying so. The `.s` files
+  are still generated.
+
+## Before anything else, on either machine
 
 ```bash
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -114,12 +162,97 @@ question is. **Run each benchmark 3–5 times and use the best**, and record
 | 6 | `./build/modules/08-type-erasure/erasure_table` | ranking **not established** — spread within a row exceeded differences between rows | Does the ranking of raw pointer / virtual / delegate / `std::function` / `poly` resolve on a quiet machine? |
 | 7 | `./build/modules/06-sparse-set/sparse_set_bench` | 5.6× over `unordered_map` at 1M; cachegrind for misses | Cross-check the cache-miss ratio with `perf stat -e cache-misses,cache-references,LLC-load-misses` if WSL2 allows it. Compare against the cachegrind numbers already recorded. |
 
-### Still not answerable on WSL2
+### Still not answerable on WSL2 — but the M1 changes one of them
 
 | # | What | Why |
 |---|---|---|
-| 8 | Module 9 exercise 3 — does a weakened memory order get caught? | x86-TSO hides it regardless of core count. Needs **ARM or POWER**, or a model checker (`herd7`, GenMC, CDSChecker). More cores raise the odds slightly; a pass still proves nothing. |
-| 9 | Module 3 — MSVC `[[no_unique_address]]` layout | Needs MSVC. WSL2 does not have it, but the **Windows host might** — `cl.exe /std:c++20 /EHsc` on `modules/03-layout-economy/compressed_pair_layout.cpp` would settle it. |
+| 8 | Module 9 exercise 3 — does a weakened memory order get caught? | **Now answerable: this is the M1's job.** See the ARM section below. |
+| 9 | Module 3 — MSVC `[[no_unique_address]]` layout | Needs MSVC. Neither WSL2 nor macOS has it, but the **Windows host does** — `cl.exe /std:c++20 /EHsc` on `modules/03-layout-economy/compressed_pair_layout.cpp` would settle it. |
+
+## Step 2b — the M1's job: weak memory ordering
+
+This is the highest-value item in the whole document, because it is the only one
+where the current answer is *"we could not test this"* rather than *"the number
+is imprecise"*.
+
+### 8a. Does the deliberately-weakened fence get caught?
+
+`modules/09-work-stealing-deque/` builds `wsq_stress` twice: once normally, and
+once as `wsq_weakened` with `-DACPP_WSQ_WEAKEN_FENCE`, which turns the two
+`seq_cst` fences into `acq_rel`. An `acq_rel` fence orders load-load, load-store
+and store-store — but **not** store-load, which is the only ordering those fences
+exist to provide.
+
+On x86 it passes, and `NOTES.md` says plainly that a pass there is not evidence.
+On AArch64 the hardware genuinely reorders, so the interleaving is reachable.
+
+```bash
+for i in $(seq 1 500); do
+  ./build/modules/09-work-stealing-deque/wsq_weakened || { echo "CAUGHT on run $i"; break; }
+done
+```
+
+- **If it fails** — that is the single best result available from any of this.
+  It converts "the argument in NOTES.md is the evidence" into "and here is the
+  machine agreeing". Record the run count it took, and keep the failing output.
+- **If it never fails in 500 runs** — say so, with the count and the machine.
+  Absence of a failure is weak evidence but it is *evidence*, unlike on x86 where
+  it is none. Consider raising the thief count in `wsq_stress.cpp` and retrying.
+
+Run the *correct* build the same number of times as a control. It must never fail.
+
+### 8b. Everything else that rests on a memory order
+
+Modules 9, 10 and 11 are full of `relaxed` loads justified by an argument. ARM is
+where a wrong one bites. Run the whole concurrency set hard:
+
+```bash
+for i in $(seq 1 500); do
+  ctest --test-dir build --output-on-failure \
+    -R 'wsq_stress|notifier_protocol|lost_wakeup|dag_executor|exception_propagation|corun_deadlock|pipeline_ordering|dataflow_engine' \
+    || { echo "FAILED on iteration $i"; break; }
+done
+```
+
+Then under TSan (Apple clang supports it on arm64; no `setarch` needed):
+
+```bash
+CXX=clang++ cmake -S . -B build/tsan -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_CXX_FLAGS="-fsanitize=thread -fno-omit-frame-pointer -g"
+cmake --build build/tsan -j
+for i in $(seq 1 20); do
+  TSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/tsan --output-on-failure -LE measurement || break
+done
+```
+
+**Remember what TSan cannot do**, because this repo already got caught by it: the
+`park()` lost wakeup was invisible to TSan, since every access was under a mutex.
+It was a protocol error, not a race. TSan-clean is necessary and nowhere near
+sufficient — the repeated plain runs above matter just as much.
+
+### 8c. Two free portability findings while you are there
+
+**libc++ instead of libstdc++.** Every `sizeof` in this repo was measured against
+libstdc++. Some of those numbers are in `NOTES.md` tables. If a `static_assert`
+fires, that is a genuine finding, not a nuisance — record which and why. Known
+differences to expect: `std::function` and `std::any` have different sizes, which
+moves `sizeof(acpp::node)` (Module 11) and the Module 8 comparison table. Add the
+libc++ numbers as a second column rather than replacing the libstdc++ ones.
+
+**Cache-line size.** `ACPP_CACHELINE_SIZE` is hard-coded to 64 and is what
+Modules 9–11 use for `alignas` on contended atomics. Apple Silicon commonly
+reports a larger destructive-interference size. `toolchain_report` prints both —
+if they disagree, the false-sharing separation in `wsq.hpp` and `notifier.hpp` is
+too small on that machine. Worth measuring with
+`-DACPP_CACHELINE_SIZE=128` and comparing `wsq_bench`, and worth recording either
+way.
+
+### What NOT to do on the Air
+
+Do not take throughput numbers there. It is fanless; a sustained benchmark
+throttles, and the results will be worse than a 16-core WSL2 box for reasons that
+have nothing to do with the code. Correctness runs are short and bursty and are
+fine. Leave rows 1–7 of the table above to the x86 machine.
 
 ## Step 3 — where to write the results
 
@@ -148,6 +281,8 @@ prediction in the section above held>.
 | 5 idle CPU | `modules/10-notifier/NOTES.md` → "Exercise 5" |
 | 6 erasure table | `modules/08-type-erasure/NOTES.md` → "Exercise 1" |
 | 7 cache misses | `modules/06-sparse-set/NOTES.md` → "Exercise 3 — measured" |
+| 8a weakened fence | `modules/09-work-stealing-deque/NOTES.md` → "Exercise 3", replacing the "cannot be tested here" paragraph |
+| 8b/8c ARM + libc++ findings | the owning module's `NOTES.md`; add libc++ as a second column, do not replace |
 | any new bug | the owning module's `NOTES.md`, plus `docs/notes.md` under "Phase C" |
 
 Then update, in this order:
@@ -176,3 +311,20 @@ which matter more with real cores:
 - **Report the spread, not just the best.** If best-to-worst on one row exceeds
   the gap between rows, the ranking is not established and the write-up should
   say exactly that.
+- **Say which machine a number came from.** Every table gets a header line with
+  the machine, core count, compiler and standard library. Two machines make this
+  mandatory rather than polite.
+
+## Two machines at once
+
+They do not collide: the x86 box owns rows 1–7 and the M1 owns 8a–8c, and those
+are different sections of different files. The repo commits directly to `main`
+(no feature branches — `docs/memory/commit-directly-to-main.md`), so:
+
+```bash
+git pull --rebase        # before you start, and again before you push
+```
+
+Commit per finding rather than in one lump, so a rebase conflict is small and
+obvious. If both machines somehow touch the same table, keep both rows — the
+whole point is that the machine is part of the result.

@@ -106,11 +106,17 @@ reading:
 - **Module 12** — the partitioner prediction is untested, not disproved: with one core there
   is no imbalance for a partitioner to fix.
 
-This machine has **one core**, so every concurrency measurement here reports `nproc`
-alongside it and none of them supports a scaling claim. What that leaves open — and how to
-settle it on a multi-core box — is [`docs/pending-verification.md`](docs/pending-verification.md).
-Start with `./build/modules/00-setup/toolchain_report`, which prints the core count and fails
-if the atomics this repo assumes are not lock-free.
+This machine has **one core** and is x86, so every concurrency measurement here reports
+`nproc` alongside it, none of them supports a scaling claim, and **no memory-order argument
+in Phase C has ever been run on hardware that could falsify it** — x86-TSO provides most of
+that ordering whether or not you asked for it.
+
+[`docs/pending-verification.md`](docs/pending-verification.md) is the handoff: what is
+untested, which machine can settle each item, and where the results go. The short version is
+that a multi-core x86 box owns the throughput numbers and an **ARM** machine owns the
+correctness question, and of the two the second matters more. Start either with
+`./build/modules/00-setup/toolchain_report`, which prints the core count and cache-line size
+and fails if the atomics this repo assumes are not lock-free.
 
 ## CI
 

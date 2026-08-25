@@ -186,7 +186,10 @@ the honest conclusion is:
   (CDSChecker / GenMC / `herd7` against the C11 model), none of which is
   available here.
 
-Flagged rather than glossed. The weakened target stays in the build as a
+Flagged rather than glossed. **An M1 is now available and this is the first thing
+to run on it** — see [`docs/pending-verification.md`](../../docs/pending-verification.md)
+§8a. AArch64 genuinely reorders store-before-load, so the interleaving this
+argument describes is reachable there. Replace this paragraph with the result. The weakened target stays in the build as a
 recorded expectation, with the comment saying it is expected to pass.
 
 ## Exercise 5 — against a mutex-guarded deque

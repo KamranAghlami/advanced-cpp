@@ -84,6 +84,24 @@ endfunction()
 set(ACPP_ASM_PROBE_FLAGS -O2 -std=c++${CMAKE_CXX_STANDARD}
     CACHE STRING "flags used for the -S codegen probes")
 
+# The probe PATTERNS are x86-64 AT&T assembly with ELF symbol names: `mov $16`,
+# `sar`, `jmp *%rax`, and a bare `acpp_probe_x:` label. None of that survives a
+# move to AArch64 (different mnemonics entirely) or to Mach-O (which prefixes C
+# symbols with an underscore).
+#
+# So the probes are generated everywhere -- reading the assembly is useful on any
+# target -- but the pattern ASSERTIONS only run where the patterns mean anything.
+# Skipping loudly beats sixteen red tests that say nothing about the code.
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT APPLE)
+    set(ACPP_ASM_ASSERTIONS ON)
+else()
+    set(ACPP_ASM_ASSERTIONS OFF)
+    message(STATUS
+        "codegen assertions disabled: they are x86-64/ELF patterns and this is "
+        "${CMAKE_SYSTEM_PROCESSOR}${APPLE_SUFFIX}. The .s files are still produced; see "
+        "docs/pending-verification.md for what to do with them.")
+endif()
+
 function(acpp_asm_probe name source)
     set(out "${CMAKE_CURRENT_BINARY_DIR}/${name}.s")
     # DEPFILE, not just DEPENDS on the source. Without it the probe is stale the
@@ -105,6 +123,10 @@ function(acpp_asm_probe name source)
 endfunction()
 
 function(acpp_asm_test test probe symbol)
+    if(NOT ACPP_ASM_ASSERTIONS)
+        return()
+    endif()
+
     cmake_parse_arguments(ARG "" "MAX_LINES" "REQUIRE;FORBID" ${ARGN})
     get_property(asm GLOBAL PROPERTY ACPP_ASM_${probe})
     set(defs "-DASM=${asm}" "-DSYMBOL=${symbol}" "-DLABEL=${test}")

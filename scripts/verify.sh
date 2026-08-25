@@ -71,8 +71,12 @@ for leg in "${legs[@]}"; do
         echo "FAIL (build) -- $log"; failed+=("$name"); continue
     fi
 
+    # setarch is Linux-only, and the ASLR conflict it works around is a Linux
+    # sanitizer problem. On macOS the runtimes start fine without it.
     runner=()
-    [[ -n $flags ]] && runner=(setarch "$(uname -m)" -R)
+    if [[ -n $flags && $(uname -s) == Linux ]] && command -v setarch > /dev/null; then
+        runner=(setarch "$(uname -m)" -R)
+    fi
 
     if ! UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 \
             "${runner[@]}" ctest --test-dir "$dir" --output-on-failure -LE measurement "${extra[@]}" >> "$log" 2>&1; then
