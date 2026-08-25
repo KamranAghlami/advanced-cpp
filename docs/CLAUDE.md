@@ -9,9 +9,13 @@ re-implementing their techniques from scratch.
 
 That document is the **source of truth** for what gets built here. Read the relevant module
 before writing code for it — every exercise in this repo traces back to a numbered exercise
-there. Module 0 (tooling setup) is done — the dependencies are wired up and both smoke tests
-pass. Module 1 is the next thing to start. Everything else gets added as modules are worked
-through.
+there.
+
+**All twelve modules and the capstone now have code, tests and a `NOTES.md`.** That does not
+mean the course is finished — Appendix C is a list of things to be able to do *without
+reference*, and the notes exist to be re-read and argued with. Several results in them
+contradict what the course text predicts (Module 8's inlining folklore, Module 11's
+switch-vs-visit, Module 12's partitioner table); those are the interesting ones.
 
 Success criteria for the whole project are Appendix C of the course doc (the self-assessment
 checklist), not "the code compiles."
@@ -39,7 +43,9 @@ build those for study.
 
 Exercise code for Modules 1–12 should generally **not** link `EnTT::EnTT` or
 `Taskflow::Taskflow`. The point is to reimplement their techniques; the dependencies are here
-to be read, built, and compared against.
+to be read, built, and compared against. Four targets link them deliberately, and each is a
+comparison the exercise asks for: `type_list_algebra` (Module 2), `entt_on_fixed_vector`
+(Module 4), `erasure_table` (Module 8), `node_layout` (Module 11).
 
 When answering a question about how EnTT or Taskflow works, **read the pinned source** rather
 than recalling it. The course doc explicitly warns about traps like the two definitions of
