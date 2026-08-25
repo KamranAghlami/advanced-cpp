@@ -19,7 +19,7 @@ find_package(Threads REQUIRED)
 # Not a cache variable: it is a fact about the source, not a knob, and a cached
 # one would keep an old value across a re-configure -- which is precisely the
 # silent drift this check exists to prevent.
-set(ACPP_STL_MANIFEST_SIZE 187)
+set(ACPP_STL_MANIFEST_SIZE 188)
 
 # ---------------------------------------------------------------------------
 # src/ is the shared library the course builds up: Module 11's executor is made
@@ -79,12 +79,18 @@ set(ACPP_ASM_PROBE_FLAGS -O2 -std=c++${CMAKE_CXX_STANDARD}
 
 function(acpp_asm_probe name source)
     set(out "${CMAKE_CURRENT_BINARY_DIR}/${name}.s")
+    # DEPFILE, not just DEPENDS on the source. Without it the probe is stale the
+    # moment a header changes -- and a stale codegen check is worse than none,
+    # because it keeps passing against assembly nobody generated any more. Cost
+    # us one wrong conclusion about view iteration before it was noticed.
     add_custom_command(
         OUTPUT "${out}"
         COMMAND "${CMAKE_CXX_COMPILER}" ${ACPP_ASM_PROBE_FLAGS}
                 "-I${PROJECT_SOURCE_DIR}/src"
+                -MD -MF "${out}.d" -MT "${out}"
                 -S "${CMAKE_CURRENT_SOURCE_DIR}/${source}" -o "${out}"
         DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/${source}"
+        DEPFILE "${out}.d"
         COMMENT "asm probe ${name}.s"
         VERBATIM)
     add_custom_target(${name} ALL DEPENDS "${out}")

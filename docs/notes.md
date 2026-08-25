@@ -248,3 +248,64 @@ through the same base pointer.
 Measured: 5.6× wall clock over `std::unordered_map` at 1M elements, from 2.5×
 fewer D1 read misses (cachegrind) plus the fact that the map's misses are
 *dependent* loads the prefetcher cannot hide.
+
+---
+
+## Module 7 — Storage and view iteration
+
+**Paged payload for pointer stability** · `entt/entity/storage.hpp` ·
+`src/acpp/storage.hpp`
+Pages are allocated once and never reallocated, so an element's address is stable
+for its whole lifetime.
+*Use when:* anything outside the container holds a pointer or reference into it.
+*Note:* a **different** motivation from the paged *sparse* array, which is about
+bounding memory waste from sparse ids. Same mechanism, opposite reasons.
+*Caveat:* stable under growth is not stable under erasure — swap-and-pop still
+moves the last element. Stability across erasure needs `in_place`.
+
+**Trait-derived policy that also makes the code well-formed** ·
+`src/acpp/storage.hpp`
+`storage_policy` is derived from `in_place_delete`, and the relocation hooks are
+`if constexpr`-guarded on movability, so a non-movable component compiles
+*because* the policy that would relocate it was never selected.
+*Use when:* an inferred policy is a correctness claim — guard the paths it
+excludes, so the compiler enforces the claim instead of a comment asserting it.
+
+**Backward iteration for safe mid-loop removal** · same file
+`begin()` at the high end, `++` toward 0, with `index()`, `operator-` and
+`operator<=>` all flipped.
+*Buys:* erasing the current element under swap-and-pop skips nothing (the
+replacement comes from a slot already passed), and elements created mid-loop are
+not visited.
+
+**Zip iterators instead of looking up** · same file
+A storage iterating itself walks the entity and payload arrays together; only a
+*view*, which leads with one pool, has to look entities up in the others.
+*Watch for:* the lookup version compiles and gives the right answer, so this is
+invisible without a codegen check.
+
+**Smallest-pool selection** · `entt/entity/view.hpp` · `src/acpp/view.hpp`
+Scan the candidate pools, lead with the smallest, filter against the rest.
+*Measured:* 266× on 1M vs 100 elements.
+*Watch for:* a view holds pointers, so "smallest" goes stale — `refresh()` is
+explicit, not automatic.
+
+**Compile-time-collapsed filter chain** · same file
+`(Get == 1u) || ...` and `(Exclude == 0u) || ...` are constants, so a
+single-pool view compiles the whole filter away.
+
+**Iterator composition via `tuple_cat`** · same file
+`tuple_cat(make_tuple(*it), pools->get_as_tuple(*it)...)` inside an
+immediately-invoked generic lambda over an `index_sequence`.
+*Buys:* an empty component contributes an empty tuple and vanishes, with no
+special case downstream. Verified free at `-O2`.
+
+**Qualify calls to names you also re-export** · `src/acpp/view.hpp`
+An unqualified `all_of(...)` on `std::array` iterators finds `std::all_of` by ADL
+and is ambiguous. Qualify to disable ADL.
+*Use when:* your library has a `stl::` shim (Module 4) — the hazard is structural.
+
+**Codegen probes need header dependencies** · root `CMakeLists.txt`
+An `-S` custom command depending only on its `.cpp` keeps passing against stale
+assembly after a header changes. `-MD -MF` plus `DEPFILE` fixes it.
+*Use when:* any generated artifact is used as evidence.
