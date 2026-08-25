@@ -173,6 +173,56 @@ degenerate cases (empty graph, single node, cycle, conditions) as tests rather
 than assuming the happy path generalises. A graph with no source is now reported
 as cancelled rather than hanging, for the same reason.
 
+## What TSan found that 61 passing tests did not
+
+Phase C's ground rule is that nothing concurrent is believed until it is
+TSan-clean. The executor passed every functional test and had **three real
+bugs**, each of which is a use-after-free or a data race that would surface as
+"it crashes about once a day in production".
+
+**1. Destroying a condition variable while a notify is in flight.**
+
+```cpp
+{ std::lock_guard g{run.mutex}; run.finished = true; }
+run.cv.notify_all();                    // <-- waiter may already be gone
+```
+
+`wait()` returns as soon as the predicate holds, and the waiter owns the
+topology — so it can destroy the `condition_variable` while this thread is still
+inside `notify_all`.
+
+The fix is to notify **inside** the lock, which is the opposite of the usual
+advice. That advice assumes the condition variable outlives both parties; here
+the waiter owns it. Holding the lock across the notify means the waiter cannot
+leave `wait()` — it must reacquire the mutex — until `notify_all` has returned.
+
+**2. Reading a node after the run that owns it has completed.**
+
+```cpp
+if(run != nullptr) finish_node(*run);       // may release wait() on another thread
+if(target->async_counter != nullptr) ...    // <-- graph may already be destroyed
+```
+
+`finish_node` can drive the topology's counter to zero, which releases `wait()`,
+which lets the waiting thread destroy the `taskflow` and every node in it. Any
+read of `target` afterwards is a use-after-free. Everything needed from the node
+is now hoisted above the `finish_node` call.
+
+**3. Statistics counters racing with `reset_stats`.**
+
+Plain `size_t` counters written by a worker in the steal loop and read or zeroed
+by the caller. A genuine data race, on data nobody schedules on.
+
+Fixed by making them **relaxed atomics** rather than by adding synchronisation.
+That removes the *race* without adding any ordering: a statistic may be read
+slightly stale, and that is the correct contract for a counter that exists only
+to be printed. Single writer per counter, so a load/store pair suffices — no RMW
+in the hot path.
+
+None of these is exotic, and none of them is the kind of thing the functional
+tests could have caught, because all three depend on which thread wins a race
+that usually has an obvious winner.
+
 ## Exercise 4 — exceptions across worker threads
 
 **The decision: the first captured exception is rethrown from `wait()`; the rest

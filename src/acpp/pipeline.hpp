@@ -15,9 +15,9 @@
 // never a moment where a thread holds something another thread must wait to
 // acquire.
 //
-// A line that has to wait does NOT block: it calls corun, so the worker spends
-// the wait executing other pipeline work. Blocking here would deadlock the pool
-// at exactly the width where the pipeline gets interesting.
+// A line waiting for its ticket backs off (yield, then a short bounded sleep)
+// rather than calling corun -- and that distinction is the sharpest thing in
+// this file. See "why not corun here" below.
 
 #include "algorithm.hpp"
 #include "config.hpp"
@@ -27,6 +27,9 @@
 #include "stl/functional.hpp"
 #include "stl/utility.hpp"
 #include "stl/vector.hpp"
+
+#include <chrono>
+#include <thread>
 
 namespace acpp {
 
@@ -66,6 +69,9 @@ struct pipe {
  * More lines means more parallelism in the parallel stages and more memory for
  * in-flight state; it does not speed up the serial stages, which are the
  * bottleneck by construction.
+ *
+ * Each line occupies a worker for its whole life, so `lines` above the pool's
+ * worker count buys nothing and costs a worker that could have been stealing.
  */
 class pipeline {
 public:
@@ -87,8 +93,8 @@ public:
         stl::atomic<bool> stopped{false};
 
         for(stl::size_t line = 0u; line < line_count; ++line) {
-            rt.silent_async([this, &rt, &next_token, &stopped, line] {
-                drive(rt, next_token, stopped, line);
+            rt.silent_async([this, &next_token, &stopped, line] {
+                drive(next_token, stopped, line);
             });
         }
 
@@ -96,7 +102,7 @@ public:
     }
 
 private:
-    void drive(runtime &rt, stl::atomic<stl::size_t> &next_token, stl::atomic<bool> &stopped,
+    void drive(stl::atomic<stl::size_t> &next_token, stl::atomic<bool> &stopped,
                const stl::size_t line) {
         for(;;) {
             const auto token = next_token.fetch_add(1u, stl::memory_order_relaxed);
@@ -116,13 +122,29 @@ private:
                 flow.current_pipe = stage;
 
                 if(stages[stage].type == pipe_type::serial) {
-                    // Wait for our turn WITHOUT blocking the worker: corun
-                    // executes other pipeline lines while we wait. Blocking
-                    // here deadlocks the pool at exactly the width where a
-                    // pipeline gets interesting.
-                    rt.corun_until([&] {
-                        return tickets[stage].load(stl::memory_order_acquire) == token;
-                    });
+                    // ---------------------------------------------------------
+                    // WHY NOT corun HERE.
+                    //
+                    // corun is the right answer for waiting on work you
+                    // SPAWNED: it can only ever run your own subtree, so
+                    // helping cannot deepen the thing you are waiting for.
+                    //
+                    // A pipeline line waits on a PEER -- the line holding the
+                    // previous token. corun would pop that peer onto this
+                    // thread's stack *below* us, and a peer holding a lower
+                    // token is exactly the one that must finish before we can
+                    // proceed. Nest four lines on one stack and the innermost
+                    // waits on the outermost, which is blocked waiting on the
+                    // innermost. Deadlock.
+                    //
+                    // Found the hard way: the ordering test did not finish in
+                    // 900 s under TSan, where one core makes the nesting
+                    // certain instead of merely possible.
+                    //
+                    // Backing off instead leaves the peer in a queue where
+                    // another worker can steal it, which is what makes progress.
+                    // ---------------------------------------------------------
+                    wait_for_ticket(stage, token);
 
                     // Re-read after waiting: the stream may have stopped while
                     // this line was queued behind an earlier token.
@@ -150,6 +172,21 @@ private:
 
             if(skip) {
                 return;
+            }
+        }
+    }
+
+    /**
+     * Yield, then sleep briefly. Bounded, so this is a wait and not a park:
+     * progress never depends on anyone waking us, only on another worker
+     * getting round to the peer line that owns the next ticket.
+     */
+    void wait_for_ticket(const stl::size_t stage, const stl::size_t token) const {
+        for(unsigned idle = 0u; tickets[stage].load(stl::memory_order_acquire) != token; ++idle) {
+            if(idle < 64u) {
+                std::this_thread::yield();
+            } else {
+                std::this_thread::sleep_for(std::chrono::microseconds{50});
             }
         }
     }

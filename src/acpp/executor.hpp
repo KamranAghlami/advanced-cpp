@@ -25,6 +25,7 @@
 #include "stl/vector.hpp"
 #include "wsq.hpp"
 
+#include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
@@ -80,6 +81,9 @@ class runtime {
 
 public:
     [[nodiscard]] executor &owner() const noexcept { return *host; }
+
+    /** The worker that created this runtime -- informational only. The work it
+     *  spawns may run anywhere, which is why corun does not use this. */
     [[nodiscard]] unsigned worker_id() const noexcept { return id; }
 
     /** Run a callable in this worker's own queue, tracked by a local counter. */
@@ -128,10 +132,23 @@ class executor {
         // a successful steal the same victim is likely to have more. Cheap
         // heuristic, large effect -- measured in modules/11-scheduler.
         unsigned sticky_victim{invalid_victim};
-        stl::size_t steal_attempts{0u};
-        stl::size_t steals_succeeded{0u};
-        stl::size_t sticky_hits{0u};
-        stl::size_t continuations{0u};
+
+        // Diagnostics, and deliberately relaxed atomics rather than plain
+        // integers. Each is written by exactly one worker and read by whoever
+        // calls stats() or reset_stats() -- so a plain int is a data race, which
+        // TSan duly reported. Making them atomic removes the *race* without
+        // adding any ordering: a statistic may be observed slightly stale, and
+        // that is the correct contract for a counter nobody schedules on.
+        //
+        // Single writer, so a load/store pair is enough; no RMW.
+        stl::atomic<stl::size_t> steal_attempts{0u};
+        stl::atomic<stl::size_t> steals_succeeded{0u};
+        stl::atomic<stl::size_t> sticky_hits{0u};
+        stl::atomic<stl::size_t> continuations{0u};
+
+        static void bump(stl::atomic<stl::size_t> &counter) noexcept {
+            counter.store(counter.load(stl::memory_order_relaxed) + 1u, stl::memory_order_relaxed);
+        }
     };
 
     static constexpr unsigned invalid_victim = static_cast<unsigned>(-1);
@@ -234,10 +251,10 @@ public:
         statistics total;
 
         for(const auto &current: workers) {
-            total.steal_attempts += current.steal_attempts;
-            total.steals_succeeded += current.steals_succeeded;
-            total.sticky_hits += current.sticky_hits;
-            total.continuations += current.continuations;
+            total.steal_attempts += current.steal_attempts.load(stl::memory_order_relaxed);
+            total.steals_succeeded += current.steals_succeeded.load(stl::memory_order_relaxed);
+            total.sticky_hits += current.sticky_hits.load(stl::memory_order_relaxed);
+            total.continuations += current.continuations.load(stl::memory_order_relaxed);
         }
 
         return total;
@@ -245,10 +262,10 @@ public:
 
     void reset_stats() noexcept {
         for(auto &current: workers) {
-            current.steal_attempts = 0u;
-            current.steals_succeeded = 0u;
-            current.sticky_hits = 0u;
-            current.continuations = 0u;
+            current.steal_attempts.store(0u, stl::memory_order_relaxed);
+            current.steals_succeeded.store(0u, stl::memory_order_relaxed);
+            current.sticky_hits.store(0u, stl::memory_order_relaxed);
+            current.continuations.store(0u, stl::memory_order_relaxed);
         }
     }
 
@@ -272,12 +289,29 @@ public:
     /**
      * Participate in the pool until `stop()` returns true.
      *
-     * Called from *inside* a worker, so it must not park -- parking is what a
-     * blocking wait would do, and the whole point is not to.
+     * Uses the CALLING thread's worker, not a worker id captured earlier.
+     *
+     * That distinction is the whole bug TSan found here: a `runtime` records
+     * the worker that created it, but the work it spawns can run on any worker,
+     * and that work can itself call corun. Keying off the stored id then had
+     * two threads driving one worker's deque and one worker's RNG. The identity
+     * that matters is "which thread am I", and thread_local is what answers it.
      */
     template<typename Predicate>
-    void corun_until(const unsigned id, Predicate &&stop) {
-        auto &self = workers[id];
+    void corun_until(Predicate &&stop) {
+        auto *current = current_worker;
+
+        if(current == nullptr) {
+            // Called from outside the pool. Nothing to help with; just wait.
+            while(!stop()) {
+                std::this_thread::yield();
+            }
+
+            return;
+        }
+
+        auto &self = *current;
+        unsigned idle = 0u;
 
         while(!stop()) {
             node *task = self.queue.pop();
@@ -288,11 +322,28 @@ public:
 
             if(task != nullptr) {
                 invoke(self, task);
-            } else {
-                // Nothing to help with yet. Yield rather than spin, and rather
-                // than sleep -- sleeping here is the deadlock this exists to
-                // avoid.
+                idle = 0u;
+                continue;
+            }
+
+            // Nothing to help with. Yield first, then back off to a short
+            // bounded sleep.
+            //
+            // A pure yield loop here is a busy-wait, and with more waiting
+            // lines than cores it burns the machine: a 4-line pipeline on one
+            // core spends three quarters of its time spinning. Found by
+            // pipeline_ordering failing to finish in 500 s under TSan.
+            //
+            // The sleep is BOUNDED, which is what keeps it out of Module 10's
+            // territory. Parking indefinitely here is the deadlock corun exists
+            // to avoid; sleeping 50 us and re-checking is not -- progress does
+            // not depend on anyone waking us.
+            ++idle;
+
+            if(idle < 64u) {
                 std::this_thread::yield();
+            } else {
+                std::this_thread::sleep_for(std::chrono::microseconds{50});
             }
         }
     }
@@ -385,12 +436,12 @@ private:
             }
         }
 
-        ++self.steal_attempts;
+        worker::bump(self.steal_attempts);
         const auto victim = pick_victim(self);
 
         if(victim != self.id) {
             if(auto *task = workers[victim].queue.steal(); task != nullptr) {
-                ++self.steals_succeeded;
+                worker::bump(self.steals_succeeded);
                 return task;
             }
         }
@@ -402,7 +453,7 @@ private:
         stl::size_t attempts = 0u;
 
         while(attempts < hard_cap) {
-            ++self.steal_attempts;
+            worker::bump(self.steal_attempts);
             ++attempts;
 
             // The overflow queue first: it holds work that did not fit anywhere.
@@ -417,11 +468,11 @@ private:
 
             if(victim != self.id) {
                 if(auto *task = workers[victim].queue.steal(); task != nullptr) {
-                    ++self.steals_succeeded;
+                    worker::bump(self.steals_succeeded);
 
                     if(sticky_enabled) {
                         if(self.sticky_victim == victim) {
-                            ++self.sticky_hits;
+                            worker::bump(self.sticky_hits);
                         }
                         self.sticky_victim = victim;
                     }
@@ -488,7 +539,7 @@ private:
             if(cache != nullptr) {
                 target = cache;
                 cache = nullptr;
-                ++self.continuations;
+                worker::bump(self.continuations);
                 goto begin_invoke;
             }
             return;
@@ -539,24 +590,35 @@ private:
             cache = release_successors(target, chosen);
         }
 
+        // Read everything needed from `target` BEFORE finishing the node.
+        //
+        // finish_node may drive the topology's counter to zero, which releases
+        // wait() on another thread -- and that thread may then destroy the
+        // taskflow, and with it this very node. Touching `target` afterwards is
+        // a use-after-free that only shows up when the waiter is quick.
+        //
+        // TSan found this; 61 passing tests did not.
+        auto *async_counter = target->async_counter;
+
         if(run != nullptr) {
             finish_node(*run);
         }
 
         // An async node has no graph and no successors: it belongs to whoever
-        // spawned it, and this is where its life ends. The counter decrement is
-        // release-ordered so a corun() that observes zero also observes
-        // everything the task did.
-        if(target->async_counter != nullptr) {
-            auto *counter = target->async_counter;
+        // spawned it, and this is where its life ends. Safe to touch here
+        // precisely because an async node has no topology to complete -- so
+        // nobody was released above.
+        if(async_counter != nullptr) {
             delete target;
-            counter->fetch_sub(1u, stl::memory_order_acq_rel);
+            // Release-ordered, so a corun() that observes zero also observes
+            // everything the task did.
+            async_counter->fetch_sub(1u, stl::memory_order_acq_rel);
         }
 
         if(cache != nullptr) {
             target = cache;
             cache = nullptr;
-            ++self.continuations;
+            worker::bump(self.continuations);
             goto begin_invoke;
         }
     }
@@ -643,11 +705,20 @@ private:
     }
 
     static void complete(topology &run) {
-        {
-            const std::lock_guard guard{run.mutex};
-            run.finished = true;
-        }
-
+        // notify_all INSIDE the lock, which looks like the pessimisation
+        // everyone is taught to avoid and is here a correctness requirement.
+        //
+        // With the notify outside, the waiter can return from wait(), destroy
+        // the topology and its condition_variable while this thread is still
+        // inside notify_all -- a use-after-free that TSan caught and that 61
+        // passing tests did not. Holding the lock across the notify means the
+        // waiter cannot leave wait() (it must reacquire the mutex first) until
+        // notify_all has returned and the guard has released.
+        //
+        // The usual advice to notify outside the lock assumes the condition
+        // variable outlives both parties. Here the waiter owns it.
+        const std::lock_guard guard{run.mutex};
+        run.finished = true;
         run.cv.notify_all();
     }
 
@@ -673,12 +744,12 @@ void runtime::silent_async(Fn &&work) {
 }
 
 inline void runtime::corun() {
-    host->corun_until(id, [this] { return spawned.load(stl::memory_order_acquire) == 0u; });
+    host->corun_until([this] { return spawned.load(stl::memory_order_acquire) == 0u; });
 }
 
 template<typename Predicate>
 void runtime::corun_until(Predicate &&stop) {
-    host->corun_until(id, stl::forward<Predicate>(stop));
+    host->corun_until(stl::forward<Predicate>(stop));
 }
 
 } // namespace acpp

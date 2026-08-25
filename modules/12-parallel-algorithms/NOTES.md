@@ -191,6 +191,37 @@ Memory is bounded by the number of **lines**, not by the length of the stream �
 `buffer` is sized by lines. That is the property that makes a pipeline a
 pipeline rather than a fancy `for_each`.
 
+## Two more things TSan and a stopwatch found
+
+**`runtime` captured a worker id, and its work does not stay on that worker.**
+
+`corun_until` took the id recorded when the `runtime` was constructed. But a
+runtime's spawned work can run on *any* worker, and that work can itself call
+corun — so two threads ended up driving one worker's deque and one worker's
+`mt19937`. TSan reported the RNG race directly.
+
+The identity that matters is "which thread am I", not "which worker created
+this object", and `thread_local current_worker` is what answers it. `corun_until`
+now uses the calling thread's worker; `runtime::worker_id()` survives as
+information only, documented as such.
+
+**The corun wait was an unbounded spin.**
+
+`pipeline::drive` waits for its serial ticket with `corun_until`, which yields
+when it finds nothing to help with. With four lines on one core, three of them
+are waiting at any moment and the yield loop burns the machine — the pipeline
+test **failed to finish in 500 seconds under TSan**, where everything is ~20×
+slower and the spinning dominates.
+
+The fix is a bounded backoff: yield for the first 64 idle passes, then sleep 50
+microseconds between checks. The sleep being **bounded** is what keeps it out of
+Module 10's territory — parking indefinitely here is the deadlock corun exists to
+avoid, but progress never depends on anyone waking us, so a short sleep is safe.
+
+The general shape: a busy-wait that is fine at one waiter per core is
+pathological at more, and a pipeline's whole point is having more lines than
+cores.
+
 ## Exercise 4 — the closure wrapper
 
 The injection point: a user wraps every chunk in their own setup and teardown,

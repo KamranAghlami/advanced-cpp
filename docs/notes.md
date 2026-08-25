@@ -615,3 +615,40 @@ that quietly measures nothing gets quoted.
 vs `incremental-serial` isolates parallel execution. Two legs instead of three
 would have shown a 15× win at one size and a loss at another, and explained
 neither.
+
+---
+
+## Phase C — what TSan found that the functional tests did not
+
+The executor passed all 61 tests and had four real defects. Recording them
+together because they are a *class*, not four unrelated slips.
+
+**Destroying a condition variable while a notify is in flight** ·
+`src/acpp/executor.hpp`
+The waiter owns the topology, so it can destroy the `condition_variable` while
+the notifier is still inside `notify_all`.
+*Fix:* notify **inside** the lock — the opposite of the usual advice, which
+assumes the condition variable outlives both parties.
+
+**Touching an object after releasing the thread that owns it** · same file
+`finish_node` can complete a run, releasing `wait()`, letting the waiter destroy
+the graph. Any read of the node afterwards is a use-after-free.
+*Rule:* read everything you need from an object **before** the operation that
+can let someone else destroy it.
+
+**A "harmless" statistics race** · same file
+Plain counters written by a worker and read by the caller.
+*Fix:* relaxed atomics, not synchronisation. That removes the race without
+adding ordering, and "may be slightly stale" is the correct contract for a
+counter nobody schedules on.
+
+**Identity captured at construction, used from another thread** · same file
+`runtime` recorded the worker that created it; its spawned work runs anywhere.
+Two threads then drove one worker's deque and RNG.
+*Rule:* for "which worker am I", the answer is `thread_local`, never a field
+captured earlier.
+
+**And one a stopwatch found:** the corun wait was an unbounded yield-spin, which
+is fine at one waiter per core and pathological above it — the pipeline test did
+not finish in 500 s under TSan. A **bounded** backoff (yield, then sleep 50 µs)
+fixes it without becoming the indefinite park that corun exists to avoid.
