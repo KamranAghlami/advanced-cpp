@@ -55,11 +55,11 @@ static_assert(sizeof(any) == sizeof(double[2]) + 2u * sizeof(void *));
 static_assert(sizeof(acpp::shallow_any) == 3u * sizeof(void *));
 
 // NOT asserted against sizeof(std::any). That comparison was measuring the
-// standard library, not this code: libstdc++'s any is 16 bytes and libc++'s is
-// 32, for reasons to do with their small-buffer sizes and nothing to do with
-// our policy field. The claim worth making is the absolute one above -- three
-// words, one of which exists only to hold a byte -- and the comparison belongs
-// in the output, where a reader can see which library they are on.
+// standard library, not this code: libstdc++'s any is 16 bytes here (measured),
+// and libc++'s is larger because its small-buffer size differs -- nothing to do
+// with our policy field. The claim worth making is the absolute one above --
+// three words, one of which exists only to hold a byte -- and the comparison
+// belongs in the output, where a reader can see which library they are on.
 
 int live_counter = 0;
 
