@@ -58,9 +58,9 @@ every build rather than asserted once in prose.
 | 0 | Tooling setup | ✅ |
 | 1 | Type identity without RTTI | ✅ [notes](modules/01-type-identity/NOTES.md) |
 | 2 | Traits as an API surface | ✅ [notes](modules/02-traits/NOTES.md) |
-| 3 | Layout economy | |
-| 4 | The freestanding shim | |
-| 5 | Bit-packed handles | |
+| 3 | Layout economy | ✅ [notes](modules/03-layout-economy/NOTES.md) |
+| 4 | The freestanding shim | ✅ [notes](modules/04-freestanding-shim/NOTES.md) |
+| 5 | Bit-packed handles | ✅ [notes](modules/05-handles/NOTES.md) |
 | 6 | The sparse set | |
 | 7 | Storage & view iteration | |
 | 8 | Type erasure, three ways | |

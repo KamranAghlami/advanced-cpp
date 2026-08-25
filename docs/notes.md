@@ -127,3 +127,74 @@ actually depends on, once, in code.
 *Use when:* always — it is what catches ABI drift when the toolchain moves.
 *Do not:* assert facts nothing depends on (`sizeof(void *)`), or the battery
 becomes something people delete instead of read.
+
+---
+
+## Module 4 — The freestanding shim
+
+**`__has_include` extension seam** · `entt/stl/*.hpp` · `src/acpp/stl/`
+One file per standard header, each an explicit `using` re-export guarded by
+`#if __has_include(<lib/ext/stl/x.hpp>)`. The library then spells everything
+`stl::` internally.
+*Use when:* you may ever need to port onto a toolchain with a partial, ancient or
+exception-free standard library.
+*Why not a build flag:* a flag must be passed by everyone consistently and misses
+become ODR violations rather than errors; an include path is owned by the target
+and cannot be half-applied.
+*Floor:* `std::tuple_size`, `std::tuple_element`, `std::initializer_list` and the
+coroutine traits stay `std::` — the core language names them.
+
+**The `using` list as a dependency manifest** · same files
+The re-export list is the complete, auditable inventory of what a library needs
+from the standard library. EnTT's is 154 names across 21 headers, and two thirds
+of it is `<type_traits>`, `<memory>`, `<utility>` and `<iterator>`.
+*Use when:* planning a port, or reviewing what a dependency actually costs. Pin
+the count in CI (`cmake/check_manifest.cmake`) so it cannot grow unread.
+
+**Fixed-capacity container behind a standard-shaped interface** ·
+`modules/04-freestanding-shim/ext/acpp/ext/stl/vector.hpp`
+Implement only the subset the consumer uses; accept and ignore the allocator;
+trap on overflow rather than reallocate.
+*Measured:* all of EnTT compiles and runs against 11 typedefs and 20 members.
+Swapping the vector still leaves 7 heap allocations per registry workload,
+because the paged arrays allocate through `allocator_traits` — a second seam.
+
+---
+
+## Module 5 — Bit-packed handles
+
+**Generational index handles** · `entt/entity/entity.hpp` · `src/acpp/handle.hpp`
+Pack an index and a generation counter into one integer; bump the generation on
+release so a stale handle fails validation with one compare.
+*Use when:* you need stable, cheap, copyable references into a dense array.
+Raw indices dangle silently, pointers dangle on reallocation, `shared_ptr` costs
+an atomic and a cache miss per dereference.
+*Sizing:* size the version for the *worst-case* slot, not the average — churn is
+never uniform, and one hot slot absorbs a large fraction of it. Arithmetic in
+`modules/05-handles/NOTES.md`.
+
+**Trait inheritance via `requires requires`** · same file
+A nested `requires requires { requires is_enum_v<T>; typename traits<underlying_t<T>>::value_type; }`
+lets `enum class my_id : uint32_t {};` be a first-class handle type with nothing
+else written, while staying a constraint rather than a hard error for enums
+whose underlying type has no traits.
+
+**Shift derived from the mask** · same file
+`popcount(index_mask)` instead of a second constant, so changing the split is a
+one-line edit and the two can never disagree.
+
+**Sentinels that compare on one field** · same file
+`null` and `tombstone` share a bit pattern; `null::operator==` compares the index
+part, `tombstone::operator==` the version part.
+*Why:* a tombstoned slot must be able to carry *another* slot's index in its
+index bits and still read as a hole — which is what makes Module 6's intrusive
+free list possible.
+
+**Branchless reserved-value skip** · same file
+`version + (version == version_mask)` steps over the reserved all-ones
+generation without a branch.
+
+**Lazy trait dispatch instead of `conditional_t`** · same file
+`conditional_t<is_enum_v<T>, underlying_type_t<T>, T>` is a hard error for
+non-enums: both branches are evaluated. A constrained partial specialization
+(`underlying_or_self`) is the fix.
