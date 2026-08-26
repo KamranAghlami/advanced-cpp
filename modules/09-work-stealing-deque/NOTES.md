@@ -163,15 +163,50 @@ line is 128 bytes — so the false sharing this section exists to prevent may st
 be happening on this machine. Every steal attempt would invalidate the owner's
 line exactly as described above, silently, with the `alignas` looking correct.
 
-**Not yet measured, and deliberately not measured here.** The test is
-`-DACPP_CACHELINE_SIZE=128` (or 256) against `wsq_bench`, and
-`docs/pending-verification.md` says not to take throughput numbers on a fanless
-Air — a sustained benchmark throttles, and a 4× padding change is exactly the
-kind of small effect thermal drift would manufacture or hide. The **layout**
-claim is checkable anywhere and the **throughput** claim is not, so:
+The **layout** claim is checkable anywhere and holds: recompiling at 64 / 128 /
+256 gives `sizeof(unbounded_wsq<int *>)` of 192 / 384 / 768 with matching
+alignment, so the constant does what it says.
 
-- recorded here as a real disagreement between the constant and the platform;
-- the measurement belongs on a machine that can hold a clock steady.
+**The throughput claim was measured here and is *not established*.** `wsq_bench`
+at `-O2`, 8 cores, 10 repetitions per configuration, chase-lev column in ms:
+
+| threads | CL=64 best/med/worst | CL=128 best/med/worst | CL=256 best/med/worst |
+|---:|---:|---:|---:|
+| 1 | 4.39 / 4.48 / 8.10 | 4.38 / 4.45 / 4.67 | 4.38 / 4.45 / 4.58 |
+| 2 | 9.03 / 9.39 / 11.87 | 9.75 / 10.04 / 10.79 | 8.42 / 8.78 / 9.71 |
+| 4 | 10.73 / 11.92 / 15.77 | 11.94 / 12.02 / 12.50 | 11.77 / 11.88 / 12.38 |
+| 8 | 12.82 / 27.98 / 29.94 | 11.67 / 20.01 / 21.99 | 13.04 / 21.21 / 22.25 |
+
+At 8 threads the gap between the best of each configuration is **1.37 ms** while
+the `CL=64` row alone spans **17.12 ms**. The noise is more than ten times the
+effect at every thread count. By this repo's own rule — if best-to-worst within a
+row exceeds the gap between rows, the ranking is not established — there is
+nothing here to report but the absence of a result.
+
+The one thing the table does support: at one thread all three are 4.38–4.39, so
+the padding is **free when uncontended**. It rules out "bigger alignment hurts
+via footprint", and nothing else.
+
+#### The methodology note, which is the useful part
+
+The first pass ran all repetitions of 64, then all of 128, then all of 256, and
+produced this:
+
+```
+8 threads:  CL=64 20.10    CL=128 18.33    CL=256 15.29     <- "256 is 24% faster"
+```
+
+That is a clean, plausible, entirely false number. Running the configurations
+**round-robin** instead — so thermal drift hits all three equally — makes it
+vanish. The Air throttles over a sustained run, so whichever configuration ran
+last was being measured on a hotter machine, and the ordering *was* the result.
+
+`docs/pending-verification.md` says not to take throughput numbers on this
+machine. It was right, and the interesting part is that the wrong method still
+produced a number worth quoting. **Interleave configurations, or do not compare
+them.**
+
+The measurement still belongs on a machine that can hold a clock steady.
 
 Note also that raising it is not free: `ACPP_CACHELINE_SIZE` is the `alignas` on
 three atomics per queue, so 64 → 256 grows every `unbounded_wsq` by ~576 bytes
