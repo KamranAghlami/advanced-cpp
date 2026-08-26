@@ -286,7 +286,85 @@ item itself, and a thief can read a slot that was never written. On x86 that
 weakening is invisible in the instruction stream; on ARM it is exactly the kind
 of thing `ldapr`/`stlr` exist to prevent.
 
-Not yet implemented — see `docs/pending-verification.md` §8a.
+### Implemented, and it fails — the first hardware confirmation in this repo
+
+`ACPP_WSQ_WEAKEN_RELEASE` demotes `push`'s publishing store on `bottom` from
+release to relaxed. Unlike the fence knob this is a **real** change on AArch64,
+checked before trusting it (`wsq_stress.cpp` at `-O2`, arm64):
+
+```
+stlr  2 -> 1
+str  62 -> 63
+```
+
+Exactly one release store became a plain store: the one that publishes the slot
+write to a thief acquiring `bottom` in `steal`.
+
+**But `wsq_stress` still could not catch it — 500 runs, 0 failures.** The harness
+was wrong, not the argument. `wsq_stress` pushes three items for every pop, so
+the queue grows to 65,536 slots and thieves work at `top` while the owner works
+at `bottom`, thousands of slots apart. The publish race needs them on the *same*
+slot. **A negative result from an experiment whose window is never open is worth
+no more than the fence result was** — which is the trap this module is about, hit
+twice in one afternoon.
+
+`wsq_publish_race.cpp` holds the queue 0–2 deep so every steal contends with the
+push publishing it. Apple clang 21, arm64, 8 cores, `-O2`:
+
+| build | runs | failures |
+|---|---:|---:|
+| `wsq_publish_race` (control) | 200 | **0** |
+| `wsq_publish_race_weakened` | 200 | **156** |
+
+78%, first failure on run 1. A representative failure:
+
+```
+  ....  owner popped 101455, thieves stole 98545
+  ....  duplicated 17, lost 17
+  FAIL  no item was consumed twice
+  FAIL  no item was dropped
+```
+
+**`duplicated` and `lost` are always equal**, and that is the fingerprint rather
+than a coincidence. A thief reads the slot before the owner's write lands, so it
+gets the previous generation's pointer — that item is consumed a second time —
+while the item actually being pushed is never consumed at all. One stale read,
+two counters, always in step. A plain lost wakeup or a dropped item would move
+one of them and not the other.
+
+So the argument in question 2 above now has a machine agreeing with it, on the
+one point where x86 could only ever stay silent:
+
+- the `release` on that store is **load-bearing**, not decoration;
+- `relaxed` there costs nothing on x86 and corrupts one run in four on ARM,
+  which is exactly the failure mode `docs/pending-verification.md` was written
+  to go looking for;
+- the control never fails, so the corruption is the weakening and not the probe.
+
+The unweakened `wsq_publish_race` is now a CI test everywhere. It is a stress
+shape `wsq_stress` does not cover, and on a weakly-ordered runner it is the only
+thing in the tree that would notice this class of regression.
+
+#### TSan is blind to it
+
+Worth its own line, because it is the second time this repo has been bitten by
+assuming otherwise. Under `-fsanitize=thread`, the weakened build:
+
+```
+15 runs -> 14 corrupted, 0 ThreadSanitizer race reports
+```
+
+It corrupts *while TSan watches* and TSan says nothing. Every access involved is
+a `std::atomic` carrying an explicit memory order, and relaxed atomics are not a
+data race — they are perfectly legal operations composed into an insufficient
+protocol. TSan checks the former and has no opinion on the latter.
+
+This is exactly the shape of the `park()` lost wakeup recorded in Module 10,
+which TSan also missed because every access was under a mutex. Two different
+mechanisms, one lesson: **TSan proves the absence of data races, not the presence
+of correct synchronisation.** The repeated plain runs are not a weaker substitute
+for the sanitizer here — for this class of bug they are the only instrument that
+works, and they need weakly-ordered hardware to work on.
 
 ## Exercise 5 — against a mutex-guarded deque
 
