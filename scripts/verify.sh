@@ -73,13 +73,22 @@ for leg in "${legs[@]}"; do
 
     # setarch is Linux-only, and the ASLR conflict it works around is a Linux
     # sanitizer problem. On macOS the runtimes start fine without it.
+    #
+    # Both arrays below are expanded as ${a[@]+"${a[@]}"} rather than "${a[@]}".
+    # macOS ships bash 3.2, where an EMPTY array expanded under `set -u` counts
+    # as an unbound variable and aborts the script. That is not a hypothetical:
+    # it aborted this script on the FIRST leg, so the remaining five never ran.
+    # The script does exit non-zero, but it prints one terse `unbound variable`
+    # line under a leg name that looks like it is in progress, which reads far
+    # too much like normal output. `runner` is empty on every non-Linux host and
+    # `extra` is empty whenever no ctest filter was passed -- the common case.
     runner=()
     if [[ -n $flags && $(uname -s) == Linux ]] && command -v setarch > /dev/null; then
         runner=(setarch "$(uname -m)" -R)
     fi
 
     if ! UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1 TSAN_OPTIONS=halt_on_error=1 \
-            "${runner[@]}" ctest --test-dir "$dir" --output-on-failure -LE measurement "${extra[@]}" >> "$log" 2>&1; then
+            ${runner[@]+"${runner[@]}"} ctest --test-dir "$dir" --output-on-failure -LE measurement ${extra[@]+"${extra[@]}"} >> "$log" 2>&1; then
         echo "FAIL (test) -- $log"; failed+=("$name"); continue
     fi
 
