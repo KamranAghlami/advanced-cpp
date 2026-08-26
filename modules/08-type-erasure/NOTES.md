@@ -147,6 +147,30 @@ libstdc++'s `std::any` is 16 because it has no third field. That one byte costin
 eight is precisely the situation Module 11 answers by packing small state into
 spare bits of a word that already exists — noted here, paid off there.
 
+**...and the comparison inverts on libc++** (Apple clang 21, arm64, 2026-08-26):
+
+| | libstdc++ (x86-64) | libc++ (arm64) |
+|---|---:|---:|
+| `sizeof(shallow_any)` | 24 | 24 |
+| `sizeof(std::any)` | **16** | **32** |
+| `sizeof(acpp::delegate<int(int)>)` | 16 | 16 |
+| `sizeof(std::function<int(int)>)` | 32 | 32 |
+
+Ours is unchanged; `std::any` doubles. libc++ gives it a three-pointer inline
+buffer plus a handler pointer, where libstdc++ uses one pointer plus a handler.
+So the sentence above — "mine is 24 where the standard's is 16" — is a
+**libstdc++ fact, not a C++ fact**. On libc++ the same design is 8 bytes
+*smaller* than `std::any`, and the "one byte costing eight" complaint buys a
+type that beats the standard library rather than losing to it.
+
+Worth keeping both columns for the reason the exercise exists: the SBO capacity
+of `std::any` is implementation-defined, so any claim of the form "type erasure
+costs N bytes" is a claim about one standard library. `std::function` happens to
+agree at 32 on both, which is what makes the `std::any` row easy to miss.
+
+The delegate rows are unchanged, which is the point of them — `acpp::delegate` is
+two pointers by construction rather than by a library's SBO policy.
+
 **The `nm` half.** `any_emission.cpp` instantiates `basic_any` for two types and
 uses different operations on each; `symbols_any_vtables` runs
 `nm -C --size-sort --defined-only` on the object file and requires that no vtable

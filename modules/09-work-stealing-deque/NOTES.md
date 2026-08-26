@@ -143,6 +143,42 @@ successful steal. Sharing a line would mean every steal attempt invalidates the
 owner's line and vice versa — false sharing on the two hottest words in the
 scheduler.
 
+### 64 is wrong on Apple Silicon (2026-08-26)
+
+`toolchain_report` on the M1:
+
+```
+hardware_destructive_interference_size = 256  (ACPP_CACHELINE_SIZE = 64)
+```
+
+Also `hardware_constructive_interference_size = 64`, so the two disagree by 4×
+— libc++ is saying "share within 64, separate by 256". `ACPP_CACHELINE_SIZE` is
+hard-coded to 64 (`config.hpp`), and `config.hpp` justifies it with "which is 64
+on every target this project builds for. If that stops being true, this is the
+one line to change." It has now stopped being true.
+
+The practical consequence: `alignas(64)` puts `top` and `bottom` in *different*
+64-byte lines but possibly the same 128-byte physical line — Apple Silicon's L1/L2
+line is 128 bytes — so the false sharing this section exists to prevent may still
+be happening on this machine. Every steal attempt would invalidate the owner's
+line exactly as described above, silently, with the `alignas` looking correct.
+
+**Not yet measured, and deliberately not measured here.** The test is
+`-DACPP_CACHELINE_SIZE=128` (or 256) against `wsq_bench`, and
+`docs/pending-verification.md` says not to take throughput numbers on a fanless
+Air — a sustained benchmark throttles, and a 4× padding change is exactly the
+kind of small effect thermal drift would manufacture or hide. The **layout**
+claim is checkable anywhere and the **throughput** claim is not, so:
+
+- recorded here as a real disagreement between the constant and the platform;
+- the measurement belongs on a machine that can hold a clock steady.
+
+Note also that raising it is not free: `ACPP_CACHELINE_SIZE` is the `alignas` on
+three atomics per queue, so 64 → 256 grows every `unbounded_wsq` by ~576 bytes
+before any elements. On a scheduler with one queue per worker that is per-thread,
+not per-item, so it is probably worth it — but "probably" is the word, and it is
+a trade this repo should measure rather than assume.
+
 ## Exercise 4 — growth and the retained garbage
 
 Old buffers are **never freed** while the queue lives, because a thief may still
@@ -186,11 +222,71 @@ the honest conclusion is:
   (CDSChecker / GenMC / `herd7` against the C11 model), none of which is
   available here.
 
-Flagged rather than glossed. **An M1 is now available and this is the first thing
-to run on it** — see [`docs/pending-verification.md`](../../docs/pending-verification.md)
-§8a. AArch64 genuinely reorders store-before-load, so the interleaving this
-argument describes is reachable there. Replace this paragraph with the result. The weakened target stays in the build as a
-recorded expectation, with the comment saying it is expected to pass.
+The weakened target stays in the build as a recorded expectation, with the
+comment saying it is expected to pass.
+
+### Run on the M1 — Apple clang 21, arm64, 8 cores (2026-08-26)
+
+```
+weakened: 500 runs, failures=0
+control:  500 runs, failures=0
+```
+
+**And the run proves nothing, for a reason worth more than the run.** The premise
+above — "AArch64 genuinely reorders store-before-load, so the interleaving is
+reachable there" — is true about the hardware and irrelevant, because the
+compiler never gives the hardware the chance. LLVM lowers *both* fence strengths
+to the same instruction on AArch64:
+
+```
+                        AArch64          x86-64
+seq_cst fence           dmb ish          lock orl $0, -64(%rsp)
+acq_rel fence           dmb ish          <nothing at all>
+```
+
+`dmb ish` is a full barrier — it orders store-load along with everything else.
+So `-DACPP_WSQ_WEAKEN_FENCE` produces **byte-identical barrier codegen** on this
+machine: `wsq_weakened` is not a weakened binary, it is the same binary. 500
+passes is not weak evidence, it is *no* evidence, and running it 5,000 times
+would add nothing.
+
+Note which way round that is. On **x86** the weakening is a genuine codegen
+change — the barrier disappears entirely — and the test still passed, which is
+the "you did not hit the window" result recorded above. On **ARM** the test can
+never fail. The platform this exercise was waiting for turns out to be the one
+platform where the experiment is vacuous.
+
+### The complementary halves
+
+Checking the other orderings the algorithm uses gives the general rule:
+
+```
+                        AArch64          x86-64
+relaxed load            ldr              movq
+acquire load            ldapr            movq        <- ARM differs, x86 does not
+relaxed store           str              movq
+release store           stlr             movq        <- ARM differs, x86 does not
+seq_cst vs acq_rel fence   same          differs     <- x86 differs, ARM does not
+```
+
+The two machines test **exactly complementary halves of the memory model**:
+
+- **x86 can only catch a weakened fence.** Its acquire/release loads and stores
+  are plain `mov`; weakening them changes no instruction.
+- **ARM can only catch a weakened load/store order.** Its fences collapse to one
+  barrier; weakening those changes no instruction.
+
+The repo's single weakening experiment is the fence — the half x86 already
+covers and ARM structurally cannot. To get a real ARM result the knob has to move
+to an acquire/release *operation*. The candidate with the clearest failure mode
+is `push()`'s `bottom.store(b + 1, release)` (`wsq.hpp:105`, and `:288` in the
+unbounded queue): weakened to `relaxed` it becomes `str` instead of `stlr`, so
+the store publishing the new `bottom` may become visible before the store of the
+item itself, and a thief can read a slot that was never written. On x86 that
+weakening is invisible in the instruction stream; on ARM it is exactly the kind
+of thing `ldapr`/`stlr` exist to prevent.
+
+Not yet implemented — see `docs/pending-verification.md` §8a.
 
 ## Exercise 5 — against a mutex-guarded deque
 

@@ -85,6 +85,51 @@ Measured, x86-64, gcc 13.3, libstdc++:
 `sizeof(tf::Node)` is **216** for comparison — the real one has more node kinds,
 subflows and semaphores.
 
+### Re-measured on libc++ — Apple clang 21, arm64 (2026-08-26)
+
+`sizeof(node)` is **160** here too, and that agreement is a coincidence worth
+unpicking rather than a confirmation. Full layout from
+`clang -Xclang -fdump-record-layouts`, which lists every member rather than the
+ones I chose to tabulate:
+
+| offset | member | bytes |
+|---:|---|---:|
+| 0 | `std::variant<...> handle` | 40 |
+| 40 | `small_vector<node *, 4>` | 56 |
+| 96 | `stl::size_t successor_count` | 8 |
+| 104 | `atomic<size_t> join_counter` | 8 |
+| 112 | `nstate::type nstate_word` | 4 |
+| 116 | `atomic<estate::type> estate_word` | 4 |
+| 120 | `topology *run` | 8 |
+| 128 | `atomic<size_t> *async_counter` | 8 |
+| 136 | `std::string label` | 24 |
+| | **total** | **160** |
+
+`std::string` is **24** on libc++ against **32** on libstdc++ — the one member
+that moved. And `sizeof(tf::Node)` is **208** here, not 216, for the same reason:
+Taskflow's node also holds a `std::string`.
+
+**Two problems with the table above this one, both found by the second standard
+library.** It lists seven members; the class has nine. `async_counter` is missing
+(it landed in the same commit, so this is an omission, not drift), and so the
+seven rows adding to exactly 160 is arithmetic that happens to land on the right
+answer. With `std::string` at 32 and `async_counter` at 8, the libstdc++ members
+sum to **168**, not 160.
+
+So either the recorded 160 or the recorded per-member breakdown is wrong for
+libstdc++, and I cannot tell which from here — `sizeof(node)` is `suite.note`d,
+never `static_assert`ed, so both values pass the build and CI never had an
+opinion. **Flagged for the x86 box**: re-run `node_layout` under gcc/libstdc++
+and dump the record layout the same way. Whichever number is wrong, the fix is
+the same one Module 3 and Module 7 already apply — assert the layout in code so
+prose cannot drift from it. A `suite.note` is not a measurement anyone can
+regress.
+
+The exercise's actual conclusion survives untouched: the **edge vector is still
+the largest member** at 56 bytes, ahead of the variant's 40, on both standard
+libraries. That relationship *is* `static_assert`ed (`node_layout.cpp:37`), which
+is exactly why it is the part that did not need re-checking.
+
 **The prediction I wrote before measuring was wrong**, and it is the useful part.
 I expected the variant to dominate, because that is what the course's framing
 points at ("`sizeof(Node)` is the max over all alternatives plus a
