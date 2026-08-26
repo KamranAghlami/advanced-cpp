@@ -140,6 +140,22 @@ ctest --test-dir build --output-on-failure -LE measurement       # all 61
 ./scripts/verify.sh                                              # gcc/clang x C++20/23 + ASan + TSan
 ```
 
+**Result on the M1 (2026-08-26): all six legs green, 47 tests each** — ASan/UBSan
+with no diagnostics, TSan with no race reports. ~14 minutes.
+
+Two caveats on that run, both worth knowing before trusting a macOS `verify.sh`:
+
+- **The `gcc-20` and `gcc-23` legs are not gcc.** `g++` on macOS is a shim for
+  Apple clang, and no Homebrew gcc was installed, so those legs re-test clang at
+  two standards. Cross-compiler coverage still needs Linux (or `brew install
+  gcc`), and a green macOS matrix is four clang legs plus two sanitizers.
+- **Do not interrupt it.** Killing a leg mid-clone leaves `third_party/<dep>`
+  without a valid `.git`, and the *next* leg fails at configure with
+  `Failed to get the hash for HEAD`. It self-heals on the following leg, so the
+  symptom is one spuriously failed leg in the middle of a green run. That is the
+  shared-`third_party` hazard below, reached by interrupting rather than by
+  running two builds at once.
+
 `scripts/verify.sh` takes ~5 hours on the single-core box and should take minutes
 on 16 cores. **Do not run it concurrently with another build of this project** —
 every build tree shares `third_party/`, and FetchContent will wipe and re-clone it
