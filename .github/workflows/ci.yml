@@ -52,6 +52,15 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+      # The layout probes' output IS the deliverable -- this repo's rule is
+      # measure-don't-assert, and cross-toolchain size comparison is the whole
+      # reason the msvc and macOS legs exist. `--output-on-failure` shows a
+      # test's notes only when it fails, which means the numbers went missing at
+      # exactly the moment they were confirmed. Re-run the layout probes verbosely
+      # so every run records the sizes it measured, on the record, per toolchain.
+      - name: Record layout measurements
+        run: ctest --test-dir build -V -R "compressed_pair_layout|layout_assertions|node_layout"
+
   # ---------------------------------------------------------------------------
   # MSVC. A third toolchain and, more usefully, a third standard library and a
   # third object format -- the same axis the M1 opened up, pointed at Windows.
@@ -75,10 +84,15 @@ jobs:
   msvc:
     name: msvc / C++${{ matrix.std }}
     runs-on: windows-2022
-    # Informational until it goes green, exactly as the TSan leg was before
-    # Module 9 -- and flipped the same way, promptly. A job that is permanently
-    # allowed to fail is a job nobody reads.
-    continue-on-error: true
+    # Blocking as of 2026-08-26, one working day after it was added and the moment
+    # it first went green -- the same promise the TSan leg was held to before
+    # Module 9. A job that is permanently allowed to fail is a job nobody reads.
+    #
+    # It earned it: on its first two runs it caught an unjustified assertion in
+    # Module 3 (a *may* in the standard asserted as a *must*, green on two
+    # toolchains that happened to take the option) and one false claim in library
+    # code (Module 12's "the default closure costs nothing", which costs a word
+    # here). Both are in those modules' NOTES.md.
     strategy:
       fail-fast: false
       matrix:
@@ -98,6 +112,15 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure -LE measurement
+
+      # The layout probes' output IS the deliverable -- this repo's rule is
+      # measure-don't-assert, and cross-toolchain size comparison is the whole
+      # reason the msvc and macOS legs exist. `--output-on-failure` shows a
+      # test's notes only when it fails, which means the numbers went missing at
+      # exactly the moment they were confirmed. Re-run the layout probes verbosely
+      # so every run records the sizes it measured, on the record, per toolchain.
+      - name: Record layout measurements
+        run: ctest --test-dir build -C Release -V -R "compressed_pair_layout|layout_assertions|node_layout"
 
   sanitizers:
     name: sanitizer / ${{ matrix.san.name }}
