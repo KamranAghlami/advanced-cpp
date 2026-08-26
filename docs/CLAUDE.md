@@ -115,11 +115,25 @@ a C++23 solution to a C++20 problem. CI enforces this.
 manual dispatch:
 
 - **build** — gcc × clang × C++20 × C++23, then `ctest`.
-- **sanitizers** — clang, ASan+UBSan blocking and TSan `continue-on-error`.
+- **msvc** — MSVC × C++20 × C++23 on `windows-2022`, Release.
+- **sanitizers** — clang, ASan+UBSan and TSan.
 
-The TSan leg became **blocking** with Module 9, when `src/acpp/wsq.hpp` landed — the first
-lock-free code of ours in the tree. Leaving it informational past that point would have
-quietly defeated the Phase C ground rules.
+All three are **blocking**. The TSan leg became so with Module 9, when `src/acpp/wsq.hpp`
+landed — the first lock-free code of ours in the tree; leaving it informational past that
+point would have quietly defeated the Phase C ground rules. The `msvc` leg became so on
+2026-08-26, the working day after it was added and the run it first went green.
+
+The `msvc` leg is a third **ABI**, which is what makes it worth the wall-clock. It settled
+Module 3's `[[no_unique_address]]` question with a measurement, inverted Module 11's
+"largest member of a node" result (via a 64-byte `std::function`), and caught an assertion in
+Module 3 that asserted a standard *may* as a *must* — green on two toolchains that simply
+happened to take the option. Twenty tests do not run there, all for reasons about the harness
+rather than the code; the job's own comment enumerates them.
+
+Each build job also runs a **Record layout measurements** step: `ctest -V` over the three
+layout probes. `--output-on-failure` prints a passing test's notes never, which meant the
+per-ABI sizes went missing exactly when they were confirmed. Cross-toolchain size comparison
+is the point of having these legs, so the numbers are on the record every run.
 
 Both sanitizer legs skip `-L measurement`: the template-depth probe compiles one TU dozens
 of times to bisect a bound, which is minutes under a sanitizer and is not a pass/fail signal.

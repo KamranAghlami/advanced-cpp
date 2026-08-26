@@ -10,6 +10,14 @@
 # pass/fail signal about the change in front of you. Run them with
 #   ctest --test-dir build -L measurement
 #
+# This is NOT the full CI matrix any more, and the gap matters. CI also runs an
+# `msvc` leg (blocking since 2026-08-26) that nothing here can reproduce: it is a
+# third ABI, and it is where the layout results actually differ. Module 3's
+# [[no_unique_address]] sizes, Module 11's largest-node-member ranking, and one
+# assertion that was wrong on every platform while passing on both of these
+# compilers -- all of them were invisible to this script by construction. A green
+# run here means the change survives two Unix toolchains, not that it is portable.
+#
 # Build trees live under build/verify/<leg> so they do not disturb ./build.
 #
 # Do not run this concurrently with another build of this project. Every build

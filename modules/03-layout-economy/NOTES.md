@@ -117,16 +117,42 @@ empty-type case. Under the Itanium ABI the answer is 2: the pair's two bases are
 and two subobjects of the same type must have distinct addresses, so the second
 is pushed to offset 1.
 
-**MSVC reports 1.** It compresses harder than the Itanium ABI here, not less.
+**MSVC reports 1.** It compresses harder than the Itanium ABI here, not less --
+while *also* passing the check that the two same-typed subobjects have distinct
+addresses. Two distinct addresses do not fit in a one-byte object, so that pair
+of observations was recorded as an open question and the probe was changed to
+print subobject offsets rather than let me pick an explanation.
 
-That is where this stops being tidy. The same MSVC run also passed the check that
-the two same-typed subobjects have *distinct addresses* — and two distinct
-addresses do not fit in a one-byte object. One of those two observations must be
-being misread, and I do not yet know which.
+**Resolved on the next run, and the answer is neither thing I guessed:**
 
-Rather than pick an explanation, `compressed_pair_layout.cpp` now prints the
-actual offsets of both subobjects alongside `sizeof`. The next MSVC run answers
-it with data. Recorded here as an **open question**, not a result.
+| | libstdc++ / libc++ | MSVC |
+|---|---|---|
+| `pair<empty, also_empty>` | offsets **0 / 0**, `sizeof` 1 — shared | offsets **0 / 1**, `sizeof` 1 — distinct |
+| `pair<empty, empty>` | offsets 0 / 1, `sizeof` **2** | offsets 0 / 1, `sizeof` **1** |
+
+MSVC puts the second empty base at **offset 1 of a one-byte object** — the
+one-past-the-end address. It gives empty bases distinct addresses without giving
+them storage, so both readings were true and neither was wrong.
+
+The two ABIs satisfy the same language rule by opposite strategies:
+
+- **Itanium** overlaps empty bases at offset 0 whenever their types differ, and
+  pays a byte only when the distinct-address rule forces it. Sharing is the
+  default; size is the fallback.
+- **MSVC** never shares an address between empty bases, and never pays for the
+  second one either. Distinctness is the default; the address just lands outside
+  the storage.
+
+Which is why `pair<empty, empty>` is *smaller* on MSVC than on Linux while
+`nua_pair<empty, int>` is twice as large: on empty **bases** MSVC is the more
+aggressive of the two, and on `[[no_unique_address]]` **members** it does nothing
+at all. "MSVC compresses less" would have been a clean story and it is wrong in
+half the cases.
+
+Worth being precise about what this does and does not license. Nothing is ever
+stored through the offset-1 subobject, because it is empty; no read or write can
+go out of bounds. It is still the kind of layout that a `static_assert` on
+`sizeof` will not catch and an `offsetof` comparison will.
 
 **A third finding, and this one is a bug in the test rather than in a compiler.**
 The check `empty bases of different types may share an address` failed on MSVC —
