@@ -13,6 +13,22 @@ acpp_test(constexpr_to_string constexpr_to_string.cpp)
 # copy of the static library's code; whether those copies merge at load time is
 # the entire question.
 # ---------------------------------------------------------------------------
+# NOT built on Windows, and the reason is the finding rather than a limitation.
+#
+# This exercise is about weak-symbol *coalescing*: on ELF and Mach-O a
+# function-local static inside a template is emitted in every image that
+# instantiates it, and the loader collapses those definitions onto one. The
+# visibility attributes decide whether it may. Windows has no such mechanism at
+# all -- a DLL and an EXE each keep their own copy unconditionally, and there is
+# no attribute that changes it. `__declspec(dllexport)` on both sides produces
+# two exported copies, not one shared one.
+#
+# So the bug half of this exercise reproduces on Windows and the fix half cannot
+# exist. Making it "pass" there would mean restructuring acpp into a DLL with a
+# real dllexport/dllimport split, which is the actual Windows answer and a
+# different lesson from the one Module 1 is teaching. Recorded in NOTES.md.
+if(NOT WIN32)
+
 # VISIBILITY_INLINES_HIDDEN is ACPP_INLINES_HIDDEN (set in the root list file),
 # which is OFF on Mach-O. That is load-bearing here, not incidental: on Apple it
 # is what lets the fixed case merge at all. The comment in the root list file has
@@ -32,6 +48,8 @@ set_target_properties(odr_across_dso PROPERTIES
     # Without this the host's own copy of the merged symbols never reaches the
     # dynamic symbol table, and the "fixed" case would have nothing to bind to.
     ENABLE_EXPORTS ON)
+
+endif()
 
 # ---------------------------------------------------------------------------
 # Codegen probes (exercises 1 and 2).

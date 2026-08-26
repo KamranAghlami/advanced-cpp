@@ -13,7 +13,7 @@ set_tests_properties(dag_executor exception_propagation PROPERTIES TIMEOUT 300)
 
 # Module 10's exercise 6, which needs an executor to exist. A measurement.
 acpp_exercise(sticky_victim_bench sticky_victim_bench.cpp)
-target_compile_options(sticky_victim_bench PRIVATE -O2)
+target_compile_options(sticky_victim_bench PRIVATE ${ACPP_OPTIMIZE})
 
 # 11.1: the switch-vs-visit question, asked of a compiler rather than of memory.
 acpp_asm_probe(variant_dispatch_codegen variant_dispatch_codegen.cpp)

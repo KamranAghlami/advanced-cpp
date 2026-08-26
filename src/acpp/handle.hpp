@@ -355,7 +355,7 @@ public:
             }
         } else if constexpr(Policy == exhaustion_policy::trap) {
             if(bumped <= versions[index]) {
-                __builtin_trap();
+                ACPP_TRAP();
             }
         }
 

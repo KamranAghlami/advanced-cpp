@@ -8,4 +8,4 @@ acpp_test(virtual_seam virtual_seam.cpp)
 # A measurement, not a test: no add_test(). Build it at -O2 regardless of the
 # tree's build type -- timing a -O0 build measures the compiler's mood.
 acpp_exercise(sparse_set_bench sparse_set_bench.cpp)
-target_compile_options(sparse_set_bench PRIVATE -O2)
+target_compile_options(sparse_set_bench PRIVATE ${ACPP_OPTIMIZE})

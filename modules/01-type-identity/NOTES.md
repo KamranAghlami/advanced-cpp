@@ -133,6 +133,24 @@ Also worth noting: the *function* `acpp::type_index<beta>::value()` stays
 static inside it merges. So comparing function addresses across the boundary is
 the wrong diagnostic; compare the IDs, which is what the test does.
 
+### Windows has no version of this mechanism
+
+`odr_across_dso` is not built on Windows, and that is a finding rather than a
+gap. The whole exercise turns on weak-symbol **coalescing**: ELF and Mach-O both
+emit a template's function-local static in every image that instantiates it and
+then have the loader collapse those definitions onto one, with visibility
+deciding whether it may. Windows does no such thing. A DLL and an EXE each keep
+their own copy unconditionally, and no attribute changes that --
+`__declspec(dllexport)` on both sides yields two exported copies, not one shared
+one.
+
+So on Windows the *bug* half of this exercise is unavoidable and the *fix* half
+does not exist. The real Windows answer is architectural: put the counter in one
+DLL and give everyone else `__declspec(dllimport)`, i.e. make the sharing
+explicit in the build graph rather than asking the loader to infer it. That is a
+different lesson, and a good argument for `type_hash` over `type_index` being
+even stronger there.
+
 **And the conclusion the exercise is really for:** `type_hash` needed none of
 this. It is a pure function of the type's spelling, computed independently on
 both sides and equal by construction. Sequential IDs are for dense array indices

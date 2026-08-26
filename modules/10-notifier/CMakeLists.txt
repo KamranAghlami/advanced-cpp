@@ -6,6 +6,6 @@ acpp_test(notifier_protocol notifier_protocol.cpp)
 
 # Exercise 5: idle CPU under a bursty load. A measurement, not a test.
 acpp_exercise(notifier_idle notifier_idle.cpp)
-target_compile_options(notifier_idle PRIVATE -O2)
+target_compile_options(notifier_idle PRIVATE ${ACPP_OPTIMIZE})
 
 set_tests_properties(lost_wakeup notifier_protocol PROPERTIES TIMEOUT 300)

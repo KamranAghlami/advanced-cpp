@@ -66,6 +66,21 @@
 // __STDCPP_THREADS__ and lets a caller disagree per counter. ACPP_NO_ATOMIC
 // still moves the default; it no longer *is* the policy. See counter.hpp.
 
+// ---------------------------------------------------------------------------
+// Stop now, loudly.
+//
+// Used where an invariant the type system cannot express has been violated --
+// relocating a type that cannot be relocated, or overflowing a fixed-capacity
+// container on a target that chose one to avoid the heap. A trap is a stack
+// trace; std::unreachable() is silent corruption; an exception may not exist on
+// the target at all.
+// ---------------------------------------------------------------------------
+#if defined _MSC_VER && !defined __clang__
+#    define ACPP_TRAP() __debugbreak()
+#else
+#    define ACPP_TRAP() __builtin_trap()
+#endif
+
 // Cache line size, for the alignas that keeps contended atomics apart
 // (Modules 9-11). Hard-coded rather than
 // std::hardware_destructive_interference_size, which GCC warns about using

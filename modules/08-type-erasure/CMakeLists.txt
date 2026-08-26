@@ -7,7 +7,7 @@ acpp_test(delegate_semantics delegate_semantics.cpp)
 # real entt::delegate and entt::poly.
 acpp_exercise(erasure_table erasure_table.cpp)
 target_link_libraries(erasure_table PRIVATE EnTT::EnTT)
-target_compile_options(erasure_table PRIVATE -O2)
+target_compile_options(erasure_table PRIVATE ${ACPP_OPTIMIZE})
 
 # ---------------------------------------------------------------------------
 # Exercise 3: does a delegate call inline?
@@ -49,8 +49,13 @@ acpp_asm_test(codegen_std_function_stored delegate_codegen acpp_probe_std_functi
 # ---------------------------------------------------------------------------
 add_library(any_emission OBJECT any_emission.cpp)
 target_link_libraries(any_emission PRIVATE acpp)
-target_compile_options(any_emission PRIVATE -O2)
+target_compile_options(any_emission PRIVATE ${ACPP_OPTIMIZE})
 
+# dumpbin /symbols exists, but its output shares no format with nm and the
+# demangled names differ entirely. The claim -- that no vtable is emitted for a
+# type never placed in an any -- is about the compiler's instantiation rules,
+# which one toolchain can settle.
+if(ACPP_GNU_DRIVER)
 add_test(NAME symbols_any_vtables COMMAND ${CMAKE_COMMAND}
     "-DOBJECT=$<TARGET_OBJECTS:any_emission>"
     "-DNM=${CMAKE_NM}"
@@ -58,3 +63,4 @@ add_test(NAME symbols_any_vtables COMMAND ${CMAKE_COMMAND}
     # The vtable for a type that was never put into an any must not exist.
     "-DFORBID=never_instantiated"
     -P "${PROJECT_SOURCE_DIR}/cmake/check_symbols.cmake")
+endif()

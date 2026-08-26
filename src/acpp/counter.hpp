@@ -42,6 +42,14 @@ struct atomic_counter
           false
 #elif defined __STDCPP_THREADS__
           true
+#elif defined _MSC_VER
+          // MSVC does not define __STDCPP_THREADS__ at all -- it ships no
+          // freestanding single-threaded mode for the macro to distinguish. Its
+          // hosted runtime is always threaded, so reading the macro's absence as
+          // "not threaded" would infer a non-atomic counter for every MSVC
+          // build. Wrong in the one direction that costs correctness rather
+          // than speed.
+          true
 #else
           false
 #endif

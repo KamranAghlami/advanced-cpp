@@ -5,7 +5,7 @@ acpp_test(view_composition view_composition.cpp)
 
 # Exercise 2's comparison: a measurement, not a test.
 acpp_exercise(view_bench view_bench.cpp)
-target_compile_options(view_bench PRIVATE -O2)
+target_compile_options(view_bench PRIVATE ${ACPP_OPTIMIZE})
 
 # Exercise 3: "verify at -O2 that the tuple machinery is entirely eliminated".
 acpp_asm_probe(view_codegen view_codegen.cpp)

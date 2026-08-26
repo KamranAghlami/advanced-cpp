@@ -16,6 +16,9 @@ target_link_libraries(type_list_algebra PRIVATE EnTT::EnTT)
 # binary-searching the smallest -ftemplate-depth that compiles. Slower to run,
 # more precise as an answer, and it works on whatever compiler is configured.
 # ---------------------------------------------------------------------------
+# Bisects -ftemplate-depth, which MSVC spells differently and bounds
+# differently. Labelled "measurement" and excluded from CI regardless.
+if(ACPP_GNU_DRIVER)
 add_test(NAME type_list_unique_cost COMMAND ${CMAKE_COMMAND}
     "-DCOMPILER=${CMAKE_CXX_COMPILER}"
     "-DSTD=${CMAKE_CXX_STANDARD}"
@@ -25,6 +28,9 @@ add_test(NAME type_list_unique_cost COMMAND ${CMAKE_COMMAND}
     -DASSERT_DEEPER=recursive
     -DASSERT_SHALLOWER=folded
     -P "${PROJECT_SOURCE_DIR}/cmake/measure_template_cost.cmake")
+endif()
 
 # Compiling a 4096-deep binary search several times over is not a unit test.
-set_tests_properties(type_list_unique_cost PROPERTIES TIMEOUT 900 LABELS "measurement")
+if(ACPP_GNU_DRIVER)
+    set_tests_properties(type_list_unique_cost PROPERTIES TIMEOUT 900 LABELS "measurement")
+endif()

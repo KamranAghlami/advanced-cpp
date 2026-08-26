@@ -76,12 +76,20 @@ cannot derive from it, so EBO cannot apply. That is why `is_ebco_eligible_v` ask
 capability advantage of `[[no_unique_address]]`: there is no base class involved,
 so finality is irrelevant.
 
-**MSVC is not measured here**, and the course asks for it. No MSVC on this
-machine and none in CI, so the honest statement is: the reason EnTT still ships
-the inheritance version is that MSVC's ABI ignores plain
-`[[no_unique_address]]` for compatibility and requires `[[msvc::no_unique_address]]`
-to actually compress. That is documented behaviour rather than something measured
-here, and it is flagged as such in `compressed_pair.hpp`.
+**MSVC.** The course asks for it and this machine has none. As of 2026-08-26 CI
+has an `msvc / C++20` and `msvc / C++23` job, so `compressed_pair_layout` now
+runs there and the numbers come from a real compiler rather than from the
+manual.
+
+The claim being tested: MSVC's ABI ignores plain `[[no_unique_address]]` for
+backward compatibility and requires `[[msvc::no_unique_address]]` to compress at
+all — which is the reason EnTT still ships the inheritance-based
+`compressed_pair` rather than deleting it in favour of the attribute. If that
+holds, `nua_pair<empty, int>` is **8** on MSVC where it is 4 on libstdc++ and
+libc++, and the inheritance version is 4 on all three.
+
+Fill this in from the first green MSVC run. Until then it is documented
+behaviour, not a measurement, and `compressed_pair.hpp` says so.
 
 ## Exercise 2 — allocator-aware without a stateless tax
 

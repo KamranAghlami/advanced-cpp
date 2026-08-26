@@ -12,6 +12,8 @@
 // The capacity is a build knob because a fixed-capacity container has to get it
 // from somewhere, and "somewhere" on a real target is the linker script.
 
+#include <acpp/config.hpp>
+
 #include <cstddef>
 #include <iterator>
 #include <memory>
@@ -278,7 +280,7 @@ private:
             // A target that chose a heap-free vector wants a loud, immediate
             // stop, not a silent allocation and not an exception it compiled
             // out. On a real board this is where the fault handler goes.
-            __builtin_trap();
+            ACPP_TRAP();
         }
     }
 

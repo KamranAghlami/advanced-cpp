@@ -3,6 +3,6 @@
 acpp_test(dataflow_engine dataflow_engine.cpp)
 
 acpp_exercise(dataflow_bench dataflow_bench.cpp)
-target_compile_options(dataflow_bench PRIVATE -O2)
+target_compile_options(dataflow_bench PRIVATE ${ACPP_OPTIMIZE})
 
 set_tests_properties(dataflow_engine PROPERTIES TIMEOUT 300)

@@ -52,6 +52,53 @@ jobs:
       - name: Test
         run: ctest --test-dir build --output-on-failure
 
+  # ---------------------------------------------------------------------------
+  # MSVC. A third toolchain and, more usefully, a third standard library and a
+  # third object format -- the same axis the M1 opened up, pointed at Windows.
+  #
+  # It is what finally answers Module 3's open question: MSVC's ABI ignores
+  # [[no_unique_address]] and needs [[msvc::no_unique_address]] to compress at
+  # all, which is exactly why EnTT still ships the inheritance-based
+  # compressed_pair. That has been documented-from-the-manual in
+  # modules/03-layout-economy/NOTES.md and never measured. Now it will be.
+  #
+  # Twenty tests do not run here, and none of them for a reason to do with this
+  # code: sixteen codegen assertions are x86-64 AT&T patterns, two negative
+  # compilation tests drive the compiler with GNU flags, one reads `nm`, and one
+  # bisects -ftemplate-depth. Module 1's cross-DSO test is skipped separately,
+  # because Windows has no weak-symbol coalescing for it to be about at all --
+  # see that module's NOTES.md.
+  #
+  # Release, not Debug: this is a multi-config generator, and the benchmark
+  # targets' optimisation flag is empty on MSVC precisely so the configuration
+  # can carry it (a Debug /O2 collides with /RTC1).
+  msvc:
+    name: msvc / C++${{ matrix.std }}
+    runs-on: windows-2022
+    # Informational until it goes green, exactly as the TSan leg was before
+    # Module 9 -- and flipped the same way, promptly. A job that is permanently
+    # allowed to fail is a job nobody reads.
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        std: [20, 23]
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Visual Studio generator rather than Ninja: it needs no developer
+      # command prompt and no third-party action to set one up.
+      - name: Configure
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DCMAKE_CXX_STANDARD=${{ matrix.std }}
+
+      - name: Build
+        run: cmake --build build --config Release -j
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure -LE measurement
+
   sanitizers:
     name: sanitizer / ${{ matrix.san.name }}
     runs-on: ubuntu-24.04

@@ -7,6 +7,7 @@
 // asks for entt::delegate and entt::poly in the table, and "same answer as the
 // real thing" is only meaningful against the real thing.
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -86,7 +87,17 @@ volatile int sink = 0;
  * actually exist for: a callable whose target the call site does not know.
  */
 void clobber(const void *pointer) {
+#if defined _MSC_VER && !defined __clang__
+    // MSVC has no inline asm on x64. A volatile store the compiler is not
+    // allowed to elide, plus a signal fence -- which is precisely a compiler
+    // barrier and nothing else -- has the same effect: the object may have been
+    // written through a pointer this translation unit cannot see.
+    static volatile const void *escape;
+    escape = pointer;
+    std::atomic_signal_fence(std::memory_order_acq_rel);
+#else
     asm volatile("" : : "g"(pointer) : "memory");
+#endif
 }
 
 struct timing {

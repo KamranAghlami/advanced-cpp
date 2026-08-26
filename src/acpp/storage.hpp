@@ -18,6 +18,8 @@
 // Same mechanism, opposite motivations. Getting that distinction straight is the
 // module's checkpoint.
 
+#include <cstdlib>
+
 #include "bit.hpp"
 #include "component.hpp"
 #include "config.hpp"
@@ -399,7 +401,11 @@ private:
 
     // Not `std::unreachable()`: if the argument above is ever wrong, a trap is a
     // stack trace and UB is a silent corruption.
-    [[noreturn]] static void unreachable_relocation() { __builtin_trap(); }
+    [[noreturn]] static void unreachable_relocation() {
+        ACPP_TRAP();
+        // ACPP_TRAP is __debugbreak on MSVC, which is not [[noreturn]].
+        std::abort();
+    }
 
     void destroy_at(const size_type pos) override {
         alloc_traits::destroy(alloc, &element_at(pos));

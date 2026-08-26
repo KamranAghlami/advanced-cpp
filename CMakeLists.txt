@@ -13,6 +13,30 @@ include(cmake/dependencies.cmake)
 
 find_package(Threads REQUIRED)
 
+# Several harnesses in this file drive the compiler directly -- to assembly, to a
+# syntax-only check, to a bisected -ftemplate-depth. All of them speak GNU driver
+# flags. MSVC speaks a different language for every one of them, so they are
+# gated on this rather than silently emitting flags the compiler will reject.
+if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
+    set(ACPP_GNU_DRIVER ON)
+else()
+    set(ACPP_GNU_DRIVER OFF)
+endif()
+
+# `-O2` for the benchmark targets, which must be optimised whatever the tree's
+# build type -- timing a -O0 build measures the compiler's mood.
+#
+# Empty on MSVC deliberately. Visual Studio is a multi-config generator, so the
+# configuration already carries its own optimisation setting, and adding /O2 to
+# a Debug configuration collides with /RTC1 (error D8016). Build the Release
+# configuration there instead; the benchmarks are not tests and nothing else
+# depends on the level.
+if(MSVC)
+    set(ACPP_OPTIMIZE "")
+else()
+    set(ACPP_OPTIMIZE -O2)
+endif()
+
 # Module 4. The number of distinct std:: names src/acpp/stl re-exports -- the
 # library's complete dependency on the standard library, pinned so that adding
 # one is a visible decision. Checked by the `stl_manifest` test.
@@ -39,8 +63,21 @@ target_link_libraries(acpp PUBLIC Threads::Threads)
 # PUBLIC, so every exercise inherits them. The tree is clean under these today,
 # and the point of turning them on is that it stays that way -- a warning found
 # by somebody's IDE and not by CI is a warning that comes back.
-if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+if(ACPP_GNU_DRIVER)
     target_compile_options(acpp PUBLIC -Wall -Wextra)
+elseif(MSVC)
+    # /W4 is MSVC's equivalent of -Wall -Wextra (/Wall includes the noisy
+    # per-struct-padding diagnostics and is not what anyone means by it).
+    # /permissive- turns off the last of the pre-standard behaviours, and
+    # /Zc:preprocessor gets the conforming preprocessor the __VA_ARGS__ use in
+    # the codegen probes needs.
+    # /W4, not /Wall -- MSVC's /Wall includes per-struct padding diagnostics and
+    # is not what anyone means by "all warnings". /permissive- turns off the last
+    # pre-standard behaviours. /Zc:__cplusplus is required or the macro reports
+    # 199711L regardless of /std, and this tree reads it. CMake supplies /EHsc.
+    target_compile_options(acpp PUBLIC /W4 /permissive- /Zc:__cplusplus /Zc:preprocessor)
+    # NOMINMAX: <windows.h> defines min/max as macros and breaks std::min.
+    target_compile_definitions(acpp PUBLIC NOMINMAX WIN32_LEAN_AND_MEAN)
 endif()
 # Hidden by default: the Module 1 ODR exercise is only honest if the project's
 # own default visibility is the one that causes the bug.
@@ -116,17 +153,25 @@ set(ACPP_ASM_PROBE_FLAGS -O2 -std=c++${CMAKE_CXX_STANDARD}
 # So the probes are generated everywhere -- reading the assembly is useful on any
 # target -- but the pattern ASSERTIONS only run where the patterns mean anything.
 # Skipping loudly beats sixteen red tests that say nothing about the code.
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT APPLE)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64|amd64" AND NOT APPLE AND ACPP_GNU_DRIVER)
     set(ACPP_ASM_ASSERTIONS ON)
 else()
     set(ACPP_ASM_ASSERTIONS OFF)
     message(STATUS
-        "codegen assertions disabled: they are x86-64/ELF patterns and this is "
-        "${CMAKE_SYSTEM_PROCESSOR}${APPLE_SUFFIX}. The .s files are still produced; see "
-        "docs/pending-verification.md for what to do with them.")
+        "codegen assertions disabled on ${CMAKE_SYSTEM_PROCESSOR}/${CMAKE_CXX_COMPILER_ID}: "
+        "the patterns are x86-64 AT&T with ELF symbol names. See "
+        "docs/pending-verification.md.")
 endif()
 
 function(acpp_asm_probe name source)
+    if(NOT ACPP_GNU_DRIVER)
+        # The probe itself shells out with -O2 -std= -MD -MF -S, none of which
+        # MSVC understands. Its /FA has no -o and writes .asm next to the object,
+        # and the Intel-syntax output shares no patterns with the assertions
+        # anyway -- so there is nothing for a shared rule to reuse.
+        return()
+    endif()
+
     set(out "${CMAKE_CURRENT_BINARY_DIR}/${name}.s")
     # DEPFILE, not just DEPENDS on the source. Without it the probe is stale the
     # moment a header changes -- and a stale codegen check is worse than none,
@@ -182,6 +227,15 @@ endfunction()
 # is to compile them and require the failure.
 # ---------------------------------------------------------------------------
 function(acpp_compile_fail_test test source)
+    if(NOT ACPP_GNU_DRIVER)
+        # check_compile_fails.cmake drives the compiler with -std= and
+        # -fsyntax-only. The MSVC spellings (/std:, /Zs) and its diagnostic text
+        # are different enough that a shared script would be two scripts wearing
+        # one name. The claims these tests make are language rules, not compiler
+        # behaviour, so one conforming compiler proving them is enough.
+        return()
+    endif()
+
     cmake_parse_arguments(ARG "" "EXPECT" "DEFS" ${ARGN})
     set(defs "-DCOMPILER=${CMAKE_CXX_COMPILER}" "-DSTD=${CMAKE_CXX_STANDARD}"
              "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/${source}"

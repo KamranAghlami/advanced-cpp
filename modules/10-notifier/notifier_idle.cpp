@@ -22,7 +22,11 @@
 #include <thread>
 #include <vector>
 
-#include <sys/resource.h>
+#if defined _WIN32
+#    include <windows.h>
+#else
+#    include <sys/resource.h>
+#endif
 
 #include <acpp/notifier.hpp>
 
@@ -30,7 +34,31 @@ namespace {
 
 using namespace std::chrono_literals;
 
+/**
+ * CPU time consumed by this process, user + kernel.
+ *
+ * Wall time is useless here: the workload is mostly idle by construction, so
+ * every strategy takes about the same wall time and they differ only in what
+ * they burn while waiting. That is the whole measurement.
+ */
 [[nodiscard]] double cpu_seconds() {
+#if defined _WIN32
+    FILETIME created{};
+    FILETIME exited{};
+    FILETIME kernel{};
+    FILETIME user{};
+    GetProcessTimes(GetCurrentProcess(), &created, &exited, &kernel, &user);
+
+    // FILETIME counts 100-nanosecond ticks, split across two 32-bit halves.
+    const auto seconds = [](const FILETIME &value) {
+        ULARGE_INTEGER packed{};
+        packed.LowPart = value.dwLowDateTime;
+        packed.HighPart = value.dwHighDateTime;
+        return static_cast<double>(packed.QuadPart) * 1e-7;
+    };
+
+    return seconds(kernel) + seconds(user);
+#else
     rusage usage{};
     getrusage(RUSAGE_SELF, &usage);
 
@@ -39,6 +67,7 @@ using namespace std::chrono_literals;
     const auto system = static_cast<double>(usage.ru_stime.tv_sec)
                         + static_cast<double>(usage.ru_stime.tv_usec) * 1e-6;
     return user + system;
+#endif
 }
 
 struct result {
