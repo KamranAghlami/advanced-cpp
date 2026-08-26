@@ -11,6 +11,7 @@
 // type that nonetheless needs stable addresses opts in.
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <type_traits>
 

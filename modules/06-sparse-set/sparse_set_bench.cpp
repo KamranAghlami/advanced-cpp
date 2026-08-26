@@ -13,6 +13,7 @@
 // The number that matters is the *ratio* at each size, and the explanation has
 // to be in cache lines rather than vibes -- see NOTES.md.
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
