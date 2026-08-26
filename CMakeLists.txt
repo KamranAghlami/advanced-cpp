@@ -44,9 +44,33 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
 endif()
 # Hidden by default: the Module 1 ODR exercise is only honest if the project's
 # own default visibility is the one that causes the bug.
+#
+# ...but `-fvisibility-inlines-hidden` has to come off on Mach-O, and the reason
+# is a finding rather than a nuisance. It demotes an inline function's static
+# local from `weak external` to `weak private external`. On ELF that is free --
+# the symbol stays exported and the loader still merges it. On Mach-O, dyld's
+# coalescing of weak definitions across images is the *only* thing making a
+# function-local static process-wide, so hiding it gives every image its own copy
+# of acpp::sequential_counter<>::next()::value -- two counters, handing out the
+# same small integers to different types. Measured on Apple clang 21 (arm64):
+# host alpha=0, and a type the plugin registered at load time also 0. The
+# collision is silent, and worse than the bug Module 1 is about: the ODR test's
+# agreement check still passes, because the *memoised* per-type static coalesces
+# even when the counter behind it does not. With the flag off: alpha=2, beta=3,
+# which is exactly the ordering odr_across_dso.cpp predicts for ELF.
+#
+# The bug reproduction is unaffected -- naive::type_index carries an explicit
+# ACPP_HIDDEN, so it splits by attribute, not by this flag.
+# See modules/01-type-identity/NOTES.md.
+if(APPLE)
+    set(ACPP_INLINES_HIDDEN OFF)
+else()
+    set(ACPP_INLINES_HIDDEN ON)
+endif()
+
 set_target_properties(acpp PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON
+    VISIBILITY_INLINES_HIDDEN ${ACPP_INLINES_HIDDEN}
     POSITION_INDEPENDENT_CODE ON)
 
 # The template's hello-world, kept as a build canary for the bare toolchain.

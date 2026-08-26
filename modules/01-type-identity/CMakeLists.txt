@@ -13,17 +13,22 @@ acpp_test(constexpr_to_string constexpr_to_string.cpp)
 # copy of the static library's code; whether those copies merge at load time is
 # the entire question.
 # ---------------------------------------------------------------------------
+# VISIBILITY_INLINES_HIDDEN is ACPP_INLINES_HIDDEN (set in the root list file),
+# which is OFF on Mach-O. That is load-bearing here, not incidental: on Apple it
+# is what lets the fixed case merge at all. The comment in the root list file has
+# the measurements. Hiding inlines here again would re-break it for these two
+# targets only, which is a confusing way to fail.
 add_library(odr_plugin SHARED odr_plugin.cpp)
 target_link_libraries(odr_plugin PRIVATE acpp)
 set_target_properties(odr_plugin PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON)
+    VISIBILITY_INLINES_HIDDEN ${ACPP_INLINES_HIDDEN})
 
 acpp_test(odr_across_dso odr_across_dso.cpp)
 target_link_libraries(odr_across_dso PRIVATE odr_plugin)
 set_target_properties(odr_across_dso PROPERTIES
     CXX_VISIBILITY_PRESET hidden
-    VISIBILITY_INLINES_HIDDEN ON
+    VISIBILITY_INLINES_HIDDEN ${ACPP_INLINES_HIDDEN}
     # Without this the host's own copy of the merged symbols never reaches the
     # dynamic symbol table, and the "fixed" case would have nothing to bind to.
     ENABLE_EXPORTS ON)

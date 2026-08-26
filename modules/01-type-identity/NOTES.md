@@ -139,6 +139,86 @@ both sides and equal by construction. Sequential IDs are for dense array indices
 inside one binary. The moment an identifier crosses a boundary — a DSO, a socket,
 a file — you wanted the hash.
 
+### Re-measured on Mach-O — Apple clang 21, arm64, libc++ (2026-08-26)
+
+The ELF story above is complete for ELF. On macOS the same source, same flags and
+same test **failed**, and the reason turned out to be a sharper version of the
+same lesson.
+
+First result, before any change:
+
+```
+beta: naive host=1 plugin=2 | fixed host=1 plugin=2
+FAIL  the id agrees across the boundary once both are visible
+```
+
+The fixed case behaved exactly like the naive one. `nm -m` says why — this is the
+Mach-O counterpart of the `readelf` output above:
+
+```
+$ nm -m libodr_plugin.dylib | c++filt
+  non-external (was a private external)  acpp::type_index<odr::beta>::value()::value
+```
+
+There is no `STB_GNU_UNIQUE` on Mach-O. The merge mechanism is dyld's coalescing
+of **weak external** definitions across images, and `weak external` is a linkage
+class the static local has to actually *be* in. `-fvisibility-inlines-hidden`
+demotes it to `non-external`, so each image kept its own copy and nothing
+coalesced.
+
+On ELF that same flag is harmless — the note above records that the *function*
+stays `HIDDEN` while the static still merges, because `UNIQUE`/`DEFAULT` is
+decided separately from the enclosing function's visibility. On Mach-O there is
+no such separation: hiding the inline hides the static, and the static is the
+whole fix. **One flag, free on one platform and fatal on the other.**
+
+`VISIBILITY_INLINES_HIDDEN` is therefore `OFF` on Apple (root `CMakeLists.txt`,
+`ACPP_INLINES_HIDDEN`). The bug reproduction survives untouched, because
+`naive::type_index` is hidden by an explicit `ACPP_HIDDEN` attribute rather than
+by the flag — visible in the same `nm` dump, one line apart:
+
+```
+  non-external ... odr::naive::type_index<odr::beta>::value()::value   <- still split
+  weak external ... acpp::type_index<odr::beta>::value()::value        <- now merged
+```
+
+#### The part that would have been missed
+
+Fixing only the two Module 1 targets made the test pass — and left something
+worse than the original bug in place:
+
+```
+beta: naive host=1 plugin=2 | fixed host=1 plugin=1     <- test PASSES
+```
+
+`1`, where ELF gives `3`. The per-type memoised static was coalescing, but
+`acpp::sequential_counter<>::next()::value` — inside the `acpp` static library,
+still compiled with the flag ON — was not. Two counters, both starting at zero,
+each handing out dense ids to a different set of types. Measured with a probe
+against the real headers (`-fvisibility-inlines-hidden` on the `acpp` TU only):
+
+```
+host alpha=0 beta=1 | plugin-private a=0
+cross-boundary agreement for beta: OK
+uniqueness across types: *** COLLISION ***
+```
+
+`alpha` and a type the plugin registered at load time both hold id **0**. Since
+these ids exist to index storage arrays directly, that aliases two component
+types onto one slot — silently, with the exercise's own test green, because
+agreement and uniqueness are different properties and only the first was checked.
+
+With the flag off for `acpp` too, the counter is `weak external`, dyld coalesces
+it, and the numbers become `fixed host=3 plugin=3` — identical to ELF and to the
+ordering predicted at the top of `odr_across_dso.cpp`.
+
+**The lesson, restated:** a cross-DSO identity scheme has two invariants, not
+one. *Same type → same id* is what the test checked. *Different types → different
+ids* is the one that was broken, and it needs every static in the chain to merge,
+not just the one the test happens to look at. The exercise's real conclusion is
+unchanged and now doubly earned: `type_hash` needed none of this on either
+platform.
+
 ## Exercise 4 — the ranking trick, relocated
 
 `constexpr_to_string.cpp` applies the same shape to a different problem:
