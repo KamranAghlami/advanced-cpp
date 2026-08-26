@@ -64,6 +64,35 @@ That is the number that changes how you plan a port. The instinct is to worry
 about `<vector>`; the actual work is in `<type_traits>`, which is also the part
 that is hardest to replace and least likely to need replacing.
 
+### `std::aligned_storage_t` had to go (libc++, 2026-08-26)
+
+`fixed_vector` stored its elements in `std::aligned_storage_t<sizeof(Type),
+alignof(Type)>`. That trait is **deprecated in C++23** (P1413R3); libc++ marks it
+and libstdc++ does not, so a clean build on the M1 produced 24 warnings from that
+one line and the development box had produced none.
+
+Replaced with the thing the trait was standing in for:
+
+```cpp
+struct storage_type { alignas(Type) std::byte data[sizeof(Type)]; };
+```
+
+**The replacement is stricter than what it replaced**, which is the part worth
+keeping. `aligned_storage_t<Len, Align>` only guarantees a size **≥ `Len`**.
+`emplace_back` does placement new at `cells + count`, which strides by exactly
+`sizeof(Type)`, and `data()` reinterpret_casts the array to `Type *` — both were
+relying on a guarantee the trait never made, and both would have broken on an
+implementation that padded. Two `static_assert`s now pin it, per the Module 3/7
+convention.
+
+There is also a **dead entry in the manifest**: `src/acpp/stl/type_traits.hpp`
+re-exports `std::aligned_storage_t`, nothing uses it, and EnTT's own `stl/` does
+not mirror it. Since the header says the `using` list *is* the dependency
+manifest, an unused name is a defect in it — and this one obliges any freestanding
+replacement to implement a deprecated trait. Left in place for now because
+removing it changes `ACPP_STL_MANIFEST_SIZE` and the 183 below, which should be a
+deliberate edit rather than a drive-by.
+
 `src/acpp/stl/` is the same pattern, 16 headers and **183** names, pinned by the
 `stl_manifest` test against `ACPP_STL_MANIFEST_SIZE` in the root CMakeLists.
 A manifest whose whole value is that somebody read it must not be able to grow

@@ -107,7 +107,24 @@ private:
  */
 template<typename Type, std::size_t Capacity = ACPP_EXT_VECTOR_CAPACITY>
 class fixed_vector {
-    using storage_type = std::aligned_storage_t<sizeof(Type), alignof(Type)>;
+    // std::aligned_storage_t is deprecated in C++23 (P1413R3), and libc++ says
+    // so out loud -- every warning in a clean build on that standard library
+    // came from this one line. libstdc++ does not mark it, which is why it went
+    // unnoticed until the shim was built on a second implementation.
+    //
+    // Writing the storage out is also *stricter* than the trait it replaces.
+    // aligned_storage_t only promises a size >= sizeof(Type); emplace_back below
+    // does placement new at `cells + count`, which strides by exactly
+    // sizeof(Type), and data() reinterpret_casts the array to Type *. Both were
+    // relying on a guarantee the trait does not make. The asserts pin them.
+    struct storage_type {
+        alignas(Type) std::byte data[sizeof(Type)];
+    };
+
+    static_assert(sizeof(storage_type) == sizeof(Type),
+                  "emplace_back does placement new at cells + count, which strides by sizeof(Type)");
+    static_assert(alignof(storage_type) == alignof(Type),
+                  "data() reinterpret_casts cells to Type *");
 
 public:
     // The member typedef list is not boilerplate: it is the part of the
