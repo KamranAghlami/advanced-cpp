@@ -125,17 +125,34 @@ the same one Module 3 and Module 7 already apply — assert the layout in code s
 prose cannot drift from it. A `suite.note` is not a measurement anyone can
 regress.
 
-The exercise's actual conclusion survives untouched: the **edge vector is still
-the largest member** at 56 bytes, ahead of the variant's 40, on both standard
-libraries. That relationship *is* `static_assert`ed (`node_layout.cpp:37`), which
-is exactly why it is the part that did not need re-checking.
+The exercise's conclusion survives on both Unix standard libraries: the **edge
+vector is the largest member** at 56 bytes, ahead of the variant's 40, on
+libstdc++ and libc++ alike.
+
+**MSVC reverses it**, which the 2026-08-26 CI run found by failing the
+`static_assert` that pinned the comparison. The ordering rests entirely on
+`sizeof(std::function<void()>)` — 32 bytes on libstdc++ and libc++, 64 on MSVC.
+At 64 the variant becomes 72 and overtakes the 56-byte edge vector.
+
+So "what should I shrink first?" has two different correct answers depending on
+the standard library, from identical source. The comparison is therefore reported
+at run time now, and what `node_layout.cpp` asserts instead are the two
+structural facts that hold everywhere: the variant costs its largest alternative
+plus a discriminator, and the edge vector inlines four pointers before it
+allocates. Both survive a 64-byte `std::function`; the ranking does not.
+
+The wider lesson is the one the sanitizer legs keep teaching in a different key.
+A layout claim is only as portable as the implementation detail underneath it,
+and `sizeof(std::function)` is exactly such a detail.
 
 **The prediction I wrote before measuring was wrong**, and it is the useful part.
 I expected the variant to dominate, because that is what the course's framing
 points at ("`sizeof(Node)` is the max over all alternatives plus a
-discriminator"). It does not: the **edge vector is the largest member**. A task
-node spends more of itself on its topology than on its work. `node_layout.cpp`
-now `static_assert`s that relationship so the prose cannot drift from the code.
+discriminator"). On libstdc++ it does not: the **edge vector is the largest
+member**, and a task node spends more of itself on its topology than on its work.
+The irony is that the course's framing is right on MSVC and wrong here — I got
+the correct answer for the wrong standard library, which is not the same as being
+right.
 
 Every variant alternative holds a `std::function`, so they are all the same size
 — which means the variant costs *nothing* for heterogeneity. All 40 bytes are

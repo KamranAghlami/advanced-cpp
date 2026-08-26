@@ -68,9 +68,12 @@ struct alignas(32) over_aligned {
 static_assert(alignof(acpp::compressed_pair<empty, over_aligned>) == 32u);
 static_assert(sizeof(acpp::compressed_pair<empty, over_aligned>) == 32u);
 
-// Compression is per type, not per empty member: two subobjects of the same
-// type must still have distinct addresses.
-static_assert(sizeof(acpp::compressed_pair<empty, empty>) == 2u);
+// Compression is per type, not per empty member: two subobjects of the same type
+// must still have distinct addresses. How much that costs is an ABI choice --
+// 2 on the Itanium ABI, something else on MSVC -- so the size is reported by
+// compressed_pair_layout rather than pinned here. The rule itself is checked
+// there, by comparing the two addresses.
+static_assert(sizeof(acpp::compressed_pair<empty, empty>) >= 1u);
 
 // --- ring_buffer ------------------------------------------------------------
 

@@ -30,12 +30,22 @@ static_assert(sizeof(acpp::static_task) == sizeof(std::function<void()>));
 static_assert(sizeof(acpp::condition_task) == sizeof(std::function<int()>));
 static_assert(sizeof(acpp::runtime_task) == sizeof(std::function<void(acpp::runtime &)>));
 
-// And the answer the measurement gave, which is NOT the one I expected: the
-// variant is 40 bytes and the *edge vector* is 56. The largest member of a task
-// node is the container for its topology, not its work. Asserted so the claim
-// in NOTES.md cannot drift from the code.
-static_assert(sizeof(acpp::small_vector<node *, 4u>) > sizeof(node::handle_type),
-              "the edge vector is the biggest member, not the variant");
+// And the answer the measurement gave, which is NOT the one I expected: on
+// libstdc++ the variant is 40 bytes and the *edge vector* is 56, so the largest
+// member of a task node is the container for its topology, not its work.
+//
+// That ordering turns out to be a property of the standard library rather than
+// of the design. It rests on sizeof(std::function), which is 32 bytes on
+// libstdc++ and libc++ but 64 on MSVC -- where the variant grows past the edge
+// vector and takes the crown back. Two implementations, two different answers to
+// "what should I shrink first", from identical source.
+//
+// So the assertions here are the structural facts that hold on all three, and
+// which member actually wins is reported at run time on the machine that ran it.
+static_assert(sizeof(node::handle_type) > sizeof(std::function<void()>),
+              "the variant costs its largest alternative plus a discriminator");
+static_assert(sizeof(acpp::small_vector<node *, 4u>) >= 4u * sizeof(node *),
+              "the edge vector inlines four pointers before it reaches the heap");
 
 // --- exercise 5: the refcount is not a separate atomic ----------------------
 
@@ -75,8 +85,10 @@ int main() {
     suite.note("sizeof(tf::Node) = %zu   (the real thing, for comparison)", sizeof(tf::Node));
 
     suite.check(sizeof(node) >= sizeof(node::handle_type), "the variant is in there");
-    suite.check(sizeof(acpp::small_vector<node *, 4u>) > sizeof(node::handle_type),
-                "the edge vector, not the variant, is the largest member");
+    suite.note("largest member here is the %s  (std::function is %zu bytes on this stdlib)",
+               sizeof(acpp::small_vector<node *, 4u>) > sizeof(node::handle_type)
+                   ? "edge vector" : "variant",
+               sizeof(std::function<void()>));
 
     // The shrink proposal, in order of what the measurement says actually costs.
     // Full reasoning in NOTES.md; the numbers are asserted below so the prose

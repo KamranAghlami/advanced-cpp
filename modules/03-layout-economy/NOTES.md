@@ -78,18 +78,48 @@ so finality is irrelevant.
 
 **MSVC.** The course asks for it and this machine has none. As of 2026-08-26 CI
 has an `msvc / C++20` and `msvc / C++23` job, so `compressed_pair_layout` now
-runs there and the numbers come from a real compiler rather than from the
-manual.
+runs there and the numbers come from a real compiler rather than from the manual.
 
 The claim being tested: MSVC's ABI ignores plain `[[no_unique_address]]` for
 backward compatibility and requires `[[msvc::no_unique_address]]` to compress at
 all — which is the reason EnTT still ships the inheritance-based
-`compressed_pair` rather than deleting it in favour of the attribute. If that
-holds, `nua_pair<empty, int>` is **8** on MSVC where it is 4 on libstdc++ and
-libc++, and the inheritance version is 4 on all three.
+`compressed_pair` rather than deleting it in favour of the attribute.
 
-Fill this in from the first green MSVC run. Until then it is documented
-behaviour, not a measurement, and `compressed_pair.hpp` says so.
+**It holds.** The first MSVC run failed on exactly the four `nua_pair`
+assertions and on nothing else in the file:
+
+| assertion | libstdc++ / libc++ | MSVC |
+|---|---|---|
+| `sizeof(nua_pair<empty, int>)` | 4 | rejected `== 4` |
+| `sizeof(nua_pair<int, empty>)` | 4 | rejected `== 4` |
+| `sizeof(nua_pair<final_empty, int>)` | 4 | rejected `== 4` |
+| `sizeof(nua_pair<empty, also_empty>)` | 1 | rejected `== 1` |
+| `sizeof(compressed_pair<empty, int>)` | 4 | **4** — passed |
+| `sizeof(compressed_pair<empty, also_empty>)` | 1 | **1** — passed |
+
+The inheritance version compresses on all three toolchains; the attribute version
+compresses on two of them. That is the whole argument for EnTT's choice, and it
+is now a build failure rather than a footnote.
+
+What a failed `static_assert` proves is only the inequality — MSVC does not
+report the size it computed. So the file now asserts the *predicted* size
+(1 byte for the ignored-empty member, padded to the other member's alignment:
+`nua_pair<empty, int>` = 8, `nua_pair<empty, also_empty>` = 2) behind a
+`nua_compresses` constant. If those numbers are wrong, the next MSVC run says so.
+Direction measured; magnitude still a prediction under test.
+
+**A second finding, which I did not predict.** MSVC also rejected
+`sizeof(compressed_pair<empty, empty>) == 2` (`compressed_pair_layout.cpp:48`,
+`layout_assertions.cpp:73`) — the two-subobjects-of-the-same-empty-type case.
+On the Itanium ABI the answer is 2: the pair's two bases are *different* types
+(the tag differs), but each contains an `empty` base subobject, and two subobjects
+of the same type must have distinct addresses, so the second is pushed to offset
+1. MSVC computes something else and I do not yet know what.
+
+The distinct-address rule is a language guarantee, so it stays checked — by
+comparing the two addresses at run time in `main()`, which is where it belonged
+anyway. The *size* is now reported rather than asserted, because it is an ABI
+choice. The next MSVC run prints the number and it lands here.
 
 ## Exercise 2 — allocator-aware without a stateless tax
 
