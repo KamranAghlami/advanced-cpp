@@ -98,18 +98,31 @@ reading:
   and the absent empty-target check.
 - **Module 11** — `std::visit` compiled to *fewer* instructions than switch-on-index, because
   it is exhaustive by construction and emits no `default` case.
-- **Module 9** — the deliberately-weakened memory order *passes* the stress test. A green
-  test on x86 is not evidence that a memory order is correct.
+- **Module 9** — the deliberately-weakened memory order *passes* the stress test on x86.
+  **Settled on an M1 (2026-08-26), and not the way the handoff predicted.** The weakened
+  *fence* cannot fail on ARM either — clang lowers `seq_cst` and `acq_rel` fences to the same
+  `dmb ish`, so that build is not weakened at all. Moving the knob to the publish store
+  (`release` → `relaxed`, a real `stlr` → `str`) and holding the queue shallow enough for the
+  race window to open: **156 failures in 200 runs, control 0 in 200.** TSan saw none of it —
+  every access is a `std::atomic`, so there is no data race, only an insufficient protocol.
 - **Module 10** — spinning costs ~79× the idle CPU of any sleeping strategy, but the
   two-phase notifier did **not** beat a condvar on idle CPU; its advantage needs a lock-free
   push path to appear at all.
 - **Module 12** — the partitioner prediction is untested, not disproved: with one core there
   is no imbalance for a partitioner to fix.
 
-This machine has **one core** and is x86, so every concurrency measurement here reports
-`nproc` alongside it, none of them supports a scaling claim, and **no memory-order argument
-in Phase C has ever been run on hardware that could falsify it** — x86-TSO provides most of
-that ordering whether or not you asked for it.
+The development machine has **one core** and is x86, so every concurrency measurement taken
+there reports `nproc` alongside it and none of them supports a scaling claim. As of
+2026-08-26 the memory-order arguments *have* been run on hardware that can falsify them: an
+8-core M1 caught the Module 9 weakening above, and found two more things on the way — a
+Module 1 cross-DSO bug where `-fvisibility-inlines-hidden` silently gave each shared object
+its own type-id counter (two component types aliasing one storage slot, with the test green),
+and two `#include`s that only libstdc++ was supplying transitively.
+
+The general rule that fell out of it: **x86 and ARM catch complementary halves of the memory
+model.** x86 lowers acquire/release loads and stores to plain `mov` but distinguishes the two
+fences; ARM is the exact mirror. Neither machine alone tests both, and a weakening experiment
+has to be aimed at the half the machine can see.
 
 [`docs/pending-verification.md`](docs/pending-verification.md) is the handoff: what is
 untested, which machine can settle each item, and where the results go. The short version is

@@ -670,3 +670,62 @@ finds protocol errors, TSan finds races, and neither finds this.
 is fine at one waiter per core and pathological above it — the pipeline test did
 not finish in 500 s under TSan. A **bounded** backoff (yield, then sleep 50 µs)
 fixes it without becoming the indefinite park that corun exists to avoid.
+
+## Weak memory — what the M1 found that x86 could not (2026-08-26)
+
+**The two platforms test complementary halves of the memory model** ·
+`src/acpp/wsq.hpp`
+Measured lowering, clang at `-O2`:
+
+| | AArch64 | x86-64 |
+|---|---|---|
+| relaxed / acquire load | `ldr` / `ldapr` | `movq` / `movq` |
+| relaxed / release store | `str` / `stlr` | `movq` / `movq` |
+| `seq_cst` / `acq_rel` fence | `dmb ish` / `dmb ish` | `lock orl` / *nothing* |
+
+x86 can only catch a weakened **fence**; ARM can only catch a weakened
+**load/store order**. Neither is a test of both.
+*Where I'd use it:* before writing "the stress test passes, so the memory order
+is fine" — check first whether the weakening you are testing changes any
+instruction on the machine you are testing it on.
+
+**A weakening experiment needs its window held open** ·
+`modules/09-work-stealing-deque/wsq_publish_race.cpp`
+Demoting Chase–Lev's publish store from `release` to `relaxed` is a genuine
+`stlr` → `str` on ARM, and the existing stress test *still* could not catch it in
+500 runs: it pushes three items per pop, so the queue grows to 65,536 slots and
+thieves work at `top` while the owner works at `bottom`. Holding the queue 0–2
+deep so every steal contends with the push publishing it: 156 failures in 200
+runs, control 0 in 200.
+*Rule:* a green run only means something if you can say which interleaving it
+was sampling. Two negative results in this repo came from harnesses whose window
+was structurally shut.
+
+**TSan does not model insufficient synchronisation** · same file
+The weakened build corrupts on ~78% of runs and TSan reports **zero** races
+across 15 runs. Every access is a `std::atomic` with an explicit memory order, so
+there is no data race — only legal operations composed into a protocol that does
+not synchronise.
+*Rule:* the second instance of this in the repo, after Module 10's `park()`.
+TSan proves the absence of data races, not the presence of correct
+synchronisation. For the atomics-only case the plain repeated run on weakly
+ordered hardware is the *only* instrument that works.
+
+**Mach-O has no `STB_GNU_UNIQUE`** · `src/acpp/type_info.hpp`, root `CMakeLists.txt`
+Cross-DSO merging of a function-local static is dyld coalescing `weak external`
+definitions; `-fvisibility-inlines-hidden` demotes them to `non-external` and
+each image keeps its own. On ELF the same flag is free.
+*The trap:* fixing it halfway made the test pass while leaving two id counters
+alive, so two component types held the same dense index — agreement and
+uniqueness are different invariants and only the first was checked.
+*Where I'd use it:* any identity scheme that crosses a DSO boundary — assert
+both invariants, and remember the answer is usually `type_hash` anyway.
+
+**Benchmark configurations must be interleaved, not batched** ·
+`modules/09-work-stealing-deque/NOTES.md`
+Running all repetitions of one configuration before the next produced "256-byte
+padding is 24% faster at 8 threads" on a fanless machine. Round-robin
+interleaving made the effect vanish entirely — the ordering was the result,
+because the last configuration was measured on the hottest machine.
+*Rule:* interleave, or do not compare. And report the within-row spread: here it
+was 17 ms against a 1.4 ms between-configuration gap.

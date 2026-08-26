@@ -6,6 +6,14 @@ taken on cannot produce the conditions they describe.
 
 **Read this first if you are the agent or person running on another machine.**
 
+> **Update 2026-08-26 — the M1 run happened.** §8a is **settled**, though not the
+> way this document predicted: the weakened *fence* cannot fail on ARM either,
+> because clang lowers `seq_cst` and `acq_rel` fences to the same `dmb ish`.
+> Moving the knob to the publish store caught it, 156 failures in 200 runs. §8c
+> is settled. Two bugs and one build break were found on the way. Rows **1–7
+> remain open and still belong to the x86 box** — nothing below them has changed.
+> Details in the §8 sections; the per-module results are in each `NOTES.md`.
+
 ---
 
 ## The machines, and what each one is actually for
@@ -78,6 +86,32 @@ brew install cmake ninja llvm        # llvm optional; Apple clang is fine and is
 - No `setarch` → not needed; `scripts/verify.sh` already skips it off Linux.
 - **libc++, not libstdc++.** That is a feature, not a problem — see the ARM
   section.
+
+**What actually broke on first contact (2026-08-26), now fixed — expect none of
+this, but recognise it if a pin moves):**
+
+1. **Two `#include`s were missing** — `<mutex>` in `modules/02-traits/` and
+   `<algorithm>` in `modules/06-sparse-set/`. libstdc++ had been supplying both
+   transitively. Pure portability lint; the fix is one line each.
+2. **`odr_across_dso` failed**, and it was a real bug rather than a platform
+   quirk — see the Module 1 note below.
+3. **`scripts/verify.sh` aborted on its first leg** under macOS's bash 3.2,
+   where an empty array expanded under `set -u` is an unbound variable. It exits
+   non-zero but looks like a leg in progress, so check that six legs actually
+   ran.
+4. **`cmake` 4.x and Apple clang 21 both configure and build cleanly** otherwise,
+   and the codegen assertions auto-skip with the status line promised above.
+
+**Module 1's cross-DSO exercise needed a real fix, not a skip.** There is no
+`STB_GNU_UNIQUE` on Mach-O; cross-image merging of a function-local static is
+dyld coalescing `weak external` definitions, and `-fvisibility-inlines-hidden`
+demotes them to `non-external`. The trap is what happened next: fixing it for the
+two Module 1 targets made the test pass while `acpp`'s own counter stayed
+per-image, so `alpha` and a plugin-registered type both held id **0** — two
+component types aliasing one storage slot, test green. `VISIBILITY_INLINES_HIDDEN`
+is now `OFF` on Apple for `acpp` too (`ACPP_INLINES_HIDDEN`), and macOS
+reproduces the ELF numbers exactly. **Agreement and uniqueness are different
+invariants; the test only checked the first.**
 - The codegen assertions **auto-skip**: their patterns are x86-64 AT&T assembly
   with ELF symbol names, and CMake prints a status line saying so. The `.s` files
   are still generated.
@@ -166,7 +200,7 @@ question is. **Run each benchmark 3–5 times and use the best**, and record
 
 | # | What | Why |
 |---|---|---|
-| 8 | Module 9 exercise 3 — does a weakened memory order get caught? | **Now answerable: this is the M1's job.** See the ARM section below. |
+| ~~8~~ | ~~Module 9 exercise 3 — does a weakened memory order get caught?~~ | **DONE 2026-08-26.** Yes, once the knob is aimed at the half of the memory model ARM can see. See §8a. |
 | 9 | Module 3 — MSVC `[[no_unique_address]]` layout | Needs MSVC. Neither WSL2 nor macOS has it, but the **Windows host does** — `cl.exe /std:c++20 /EHsc` on `modules/03-layout-economy/compressed_pair_layout.cpp` would settle it. |
 
 ## Step 2b — the M1's job: weak memory ordering
@@ -175,31 +209,71 @@ This is the highest-value item in the whole document, because it is the only one
 where the current answer is *"we could not test this"* rather than *"the number
 is imprecise"*.
 
-### 8a. Does the deliberately-weakened fence get caught?
+### 8a. Does the deliberately-weakened fence get caught? — **SETTLED 2026-08-26**
 
-`modules/09-work-stealing-deque/` builds `wsq_stress` twice: once normally, and
-once as `wsq_weakened` with `-DACPP_WSQ_WEAKEN_FENCE`, which turns the two
-`seq_cst` fences into `acq_rel`. An `acq_rel` fence orders load-load, load-store
-and store-store — but **not** store-load, which is the only ordering those fences
-exist to provide.
+**No, and it never could have been.** The premise this section was written on is
+wrong, and the way it is wrong is the finding.
 
-On x86 it passes, and `NOTES.md` says plainly that a pass there is not evidence.
-On AArch64 the hardware genuinely reorders, so the interleaving is reachable.
+Clang lowers *both* fence strengths to the same instruction on AArch64:
 
-```bash
-for i in $(seq 1 500); do
-  ./build/modules/09-work-stealing-deque/wsq_weakened || { echo "CAUGHT on run $i"; break; }
-done
+```
+                        AArch64          x86-64
+seq_cst fence           dmb ish          lock orl $0, -64(%rsp)
+acq_rel fence           dmb ish          <nothing at all>
 ```
 
-- **If it fails** — that is the single best result available from any of this.
-  It converts "the argument in NOTES.md is the evidence" into "and here is the
-  machine agreeing". Record the run count it took, and keep the failing output.
-- **If it never fails in 500 runs** — say so, with the count and the machine.
-  Absence of a failure is weak evidence but it is *evidence*, unlike on x86 where
-  it is none. Consider raising the thief count in `wsq_stress.cpp` and retrying.
+`dmb ish` is a full barrier, store-load included. So `-DACPP_WSQ_WEAKEN_FENCE`
+produces **identical barrier codegen** on ARM: `wsq_weakened` is not a weakened
+binary. 500 runs, 0 failures — and that is *no* evidence rather than weak
+evidence. The hardware does reorder; the compiler never gives it the chance.
 
-Run the *correct* build the same number of times as a control. It must never fail.
+Note the direction. On **x86** the weakening is a real codegen change (the
+barrier vanishes) and the test passed anyway. On **ARM** the test cannot fail.
+The platform this item was waiting for is the one where the experiment is
+vacuous.
+
+**The general rule**, which is what to carry forward:
+
+```
+                        AArch64          x86-64
+relaxed / acquire load  ldr / ldapr      movq / movq
+relaxed / release store str / stlr       movq / movq
+seq_cst vs acq_rel      same             differs
+```
+
+x86 catches a weakened **fence**; ARM catches a weakened **load/store order**.
+Complementary halves — aim the experiment at the half the machine can see.
+
+### 8a-bis. The knob that does work — **156/200, control 0/200**
+
+`ACPP_WSQ_WEAKEN_RELEASE` demotes `push`'s publishing store on `bottom` from
+`release` to `relaxed` (a real `stlr` → `str`; verified in the object file before
+being trusted).
+
+**`wsq_stress` still could not catch it — 500 runs, 0 failures.** The harness was
+the problem: it pushes three items per pop, so the queue grows to 65,536 slots
+and thieves work at `top` while the owner works at `bottom`, thousands of slots
+apart. The publish race needs them on the same slot.
+
+`modules/09-work-stealing-deque/wsq_publish_race.cpp` holds the queue 0–2 deep.
+Apple clang 21, arm64, 8 cores, `-O2`:
+
+| build | runs | failures |
+|---|---:|---:|
+| `wsq_publish_race` (control) | 200 | **0** |
+| `wsq_publish_race_weakened` | 200 | **156** |
+
+First failure on run 1. `duplicated` and `lost` are always equal — the thief
+reads the slot before the owner's write lands, consuming the previous
+generation's pointer twice and the new item never.
+
+**TSan reports nothing**: 15 runs, 14 corrupted, 0 race reports. Every access is
+a `std::atomic` with an explicit order, so there is no data race — only an
+insufficient protocol. Second instance in this repo after Module 10's `park()`.
+
+*If you are on the x86 box:* the control build is now a CI test and must pass.
+The weakened build is expected to **pass** there, which is the point — it is the
+half x86 cannot see.
 
 ### 8b. Everything else that rests on a memory order
 
@@ -213,6 +287,13 @@ for i in $(seq 1 500); do
     || { echo "FAILED on iteration $i"; break; }
 done
 ```
+
+**Result 2026-08-26: 300 iterations, all clean** (2,400 test executions on 8 real
+cores). Nothing new fell out of the existing suite — the bug found on this
+machine came from the *new* shallow-queue harness in §8a-bis, not from running
+the old tests harder. Worth remembering when the next machine arrives: hammering
+an existing test explores more interleavings of the same shape, and a bug that
+needs a different shape will not appear however many times you run it.
 
 Then under TSan (Apple clang supports it on arm64; no `setarch` needed):
 
@@ -239,13 +320,21 @@ differences to expect: `std::function` and `std::any` have different sizes, whic
 moves `sizeof(acpp::node)` (Module 11) and the Module 8 comparison table. Add the
 libc++ numbers as a second column rather than replacing the libstdc++ ones.
 
-**Cache-line size.** `ACPP_CACHELINE_SIZE` is hard-coded to 64 and is what
-Modules 9–11 use for `alignas` on contended atomics. Apple Silicon commonly
-reports a larger destructive-interference size. `toolchain_report` prints both —
-if they disagree, the false-sharing separation in `wsq.hpp` and `notifier.hpp` is
-too small on that machine. Worth measuring with
-`-DACPP_CACHELINE_SIZE=128` and comparing `wsq_bench`, and worth recording either
-way.
+**Cache-line size — measured, and not answerable here.**
+`hardware_destructive_interference_size` is **256** against `ACPP_CACHELINE_SIZE`
+of 64, so the `alignas` separating `top` from `bottom` may not be separating them
+at all on Apple Silicon. The *layout* claim checks out (64/128/256 →
+`sizeof(unbounded_wsq<int *>)` of 192/384/768, alignment to match). The
+*throughput* claim does not resolve: at 8 threads the gap between the best of
+each configuration is 1.37 ms while the `CL=64` row alone spans 17.12 ms.
+
+**Read the methodology note in `modules/09-work-stealing-deque/NOTES.md` before
+re-running this on the x86 box.** The first pass ran all repetitions of 64, then
+128, then 256, and produced a clean "256 is 24% faster at 8 threads" that
+round-robin interleaving made vanish entirely — on a fanless machine the
+configuration that runs last is measured hottest, and the ordering *was* the
+result. Interleave configurations, or do not compare them. **This still needs the
+16-core box**, which can hold a clock steady.
 
 ### What NOT to do on the Air
 

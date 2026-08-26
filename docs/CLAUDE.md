@@ -134,7 +134,35 @@ cmake -S third_party/entt     -B third_party/entt/build     -DENTT_BUILD_TESTING
 cmake -S third_party/taskflow -B third_party/taskflow/build -DTF_BUILD_TESTS=ON -DTF_BUILD_EXAMPLES=ON
 ```
 
-## Toolchain on this machine (verified 2026-08-01)
+## Machines
+
+Results in this repo come from more than one machine, and the machine is part of
+the result. Every table in a `NOTES.md` carries a header line saying which.
+
+| Machine | Role | Verified |
+|---|---|---|
+| 1-vCPU x86 droplet, gcc 13.3 / libstdc++ | the development box; everything below describes it | 2026-08-01 |
+| **M1 MacBook Air, 8 cores, Apple clang 21 / libc++ / arm64** | weak memory ordering, a second standard library, Mach-O linkage | 2026-08-26 |
+| 16-core x86 WSL2 | every throughput and scaling number | not yet run |
+
+What the M1 settled, and what it cost: it caught the Module 9 publish-store
+weakening (156 failures in 200 runs where x86 cannot fail at all), found a
+cross-DSO id-collision bug in Module 1, two missing `#include`s, and a bash 3.2
+break in `scripts/verify.sh`. It also showed that the *fence* weakening Module 9
+had been saving for ARM is vacuous there — clang lowers both fence strengths to
+`dmb ish`. **x86 and ARM catch complementary halves of the memory model**; see
+`docs/notes.md` under "Weak memory".
+
+Two constants are wrong on Apple Silicon and are known to be:
+`ACPP_CACHELINE_SIZE` is 64 against a `hardware_destructive_interference_size` of
+256, and `VISIBILITY_INLINES_HIDDEN` has to be OFF there (`ACPP_INLINES_HIDDEN`
+in the root list file) or cross-DSO type ids silently duplicate.
+
+Throughput numbers must **not** be taken on the Air — it is fanless and throttles.
+A worked example of how that produces a plausible false result is in
+`modules/09-work-stealing-deque/NOTES.md`.
+
+## Toolchain on the development box (verified 2026-08-01)
 
 | Tool | Status |
 |---|---|
