@@ -45,6 +45,23 @@ instantiation — a parameter of type `void` — and a `requires` clause on the
 constructor cannot rescue it, because the declaration is checked regardless.
 An empty tag type with a call operator solves it and costs nothing.
 
+### MSVC: the empty closure is not free
+
+`dynamic_partitioner<>` uses `[[no_unique_address]]` on its closure so that the
+default `no_closure` costs nothing, leaving the partitioner the size of its chunk
+size alone. That holds on libstdc++ and libc++ and fails on MSVC, whose ABI
+ignores the standard attribute — the partitioner is **16 bytes there, not 8**.
+
+Found by CI's msvc job on 2026-08-26, at the same time and for the same reason as
+Module 3's `nua_pair` result; the shared fact is `acpp::nua_compresses` in
+`config.hpp`. Worth noting that this is the one place in the repo where the
+attribute was load-bearing for a size claim in *library* code rather than in a
+layout exercise, which is why it is recorded here as well as in Module 3.
+
+The partitioner is copied per parallel-for call, so 8 extra bytes is not a
+throughput concern. It matters because the design note said "costs nothing" and
+on one of three toolchains that is not true.
+
 ## Exercise 1 — the three strategies
 
 **Static** — even split, no shared state. `chunk_size == 0` means "auto":

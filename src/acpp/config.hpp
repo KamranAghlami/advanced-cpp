@@ -119,6 +119,24 @@ namespace acpp {
 // matches by type rather than by luck of what `unsigned` happens to be.
 using id_type = std::uint32_t;
 
+// Whether [[no_unique_address]] actually removes an empty member's storage.
+//
+// The attribute is permission, not obligation, and MSVC declines it: its ABI
+// ignores the standard spelling for backward compatibility and offers
+// [[msvc::no_unique_address]] as the one that compresses. Measured by CI's msvc
+// job on 2026-08-26 -- nua_pair<empty, int> is 8 bytes there against 4 under
+// libstdc++ and libc++. It is the reason EnTT still ships the inheritance-based
+// compressed_pair rather than replacing it with the attribute.
+//
+// Exposed here because two modules now have layout expectations that turn on it
+// (Module 3's pair sizes, Module 12's partitioner), and because a header that
+// uses the attribute for size should be able to say what it costs.
+#if defined _MSC_VER && !defined __clang__
+inline constexpr bool nua_compresses = false;
+#else
+inline constexpr bool nua_compresses = true;
+#endif
+
 } // namespace acpp
 
 #endif // ACPP_CONFIG_HPP

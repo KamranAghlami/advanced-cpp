@@ -86,40 +86,58 @@ all — which is the reason EnTT still ships the inheritance-based
 `compressed_pair` rather than deleting it in favour of the attribute.
 
 **It holds.** The first MSVC run failed on exactly the four `nua_pair`
-assertions and on nothing else in the file:
+assertions and on nothing else in the file, and the second run — which asserted
+the predicted sizes rather than the Itanium ones — compiled clean, so the
+magnitudes below are measured now and not inferred:
 
 | assertion | libstdc++ / libc++ | MSVC |
 |---|---|---|
-| `sizeof(nua_pair<empty, int>)` | 4 | rejected `== 4` |
-| `sizeof(nua_pair<int, empty>)` | 4 | rejected `== 4` |
-| `sizeof(nua_pair<final_empty, int>)` | 4 | rejected `== 4` |
-| `sizeof(nua_pair<empty, also_empty>)` | 1 | rejected `== 1` |
-| `sizeof(compressed_pair<empty, int>)` | 4 | **4** — passed |
-| `sizeof(compressed_pair<empty, also_empty>)` | 1 | **1** — passed |
+| `sizeof(nua_pair<empty, int>)` | 4 | **8** |
+| `sizeof(nua_pair<int, empty>)` | 4 | **8** |
+| `sizeof(nua_pair<final_empty, int>)` | 4 | **8** |
+| `sizeof(nua_pair<empty, also_empty>)` | 1 | **2** |
+| `sizeof(compressed_pair<empty, int>)` | 4 | **4** |
+| `sizeof(compressed_pair<empty, also_empty>)` | 1 | **1** |
 
 The inheritance version compresses on all three toolchains; the attribute version
 compresses on two of them. That is the whole argument for EnTT's choice, and it
 is now a build failure rather than a footnote.
 
-What a failed `static_assert` proves is only the inequality — MSVC does not
-report the size it computed. So the file now asserts the *predicted* size
-(1 byte for the ignored-empty member, padded to the other member's alignment:
-`nua_pair<empty, int>` = 8, `nua_pair<empty, also_empty>` = 2) behind a
-`nua_compresses` constant. If those numbers are wrong, the next MSVC run says so.
-Direction measured; magnitude still a prediction under test.
+An ignored attribute leaves the empty member occupying one byte, which then pads
+out to the other member's alignment — 1 + 3 + 4 rather than 4. That was the
+prediction after the first run, and the second run confirmed all four numbers.
+
+The fact now lives in `src/acpp/config.hpp` as `acpp::nua_compresses` rather than
+in this test, because Module 12's partitioner turned out to depend on it too.
 
 **A second finding, which I did not predict.** MSVC also rejected
-`sizeof(compressed_pair<empty, empty>) == 2` (`compressed_pair_layout.cpp:48`,
-`layout_assertions.cpp:73`) — the two-subobjects-of-the-same-empty-type case.
-On the Itanium ABI the answer is 2: the pair's two bases are *different* types
-(the tag differs), but each contains an `empty` base subobject, and two subobjects
-of the same type must have distinct addresses, so the second is pushed to offset
-1. MSVC computes something else and I do not yet know what.
+`sizeof(compressed_pair<empty, empty>) == 2` — the two-subobjects-of-the-same-
+empty-type case. Under the Itanium ABI the answer is 2: the pair's two bases are
+*different* types (the tag differs), but each contains an `empty` base subobject,
+and two subobjects of the same type must have distinct addresses, so the second
+is pushed to offset 1.
 
-The distinct-address rule is a language guarantee, so it stays checked — by
-comparing the two addresses at run time in `main()`, which is where it belonged
-anyway. The *size* is now reported rather than asserted, because it is an ABI
-choice. The next MSVC run prints the number and it lands here.
+**MSVC reports 1.** It compresses harder than the Itanium ABI here, not less.
+
+That is where this stops being tidy. The same MSVC run also passed the check that
+the two same-typed subobjects have *distinct addresses* — and two distinct
+addresses do not fit in a one-byte object. One of those two observations must be
+being misread, and I do not yet know which.
+
+Rather than pick an explanation, `compressed_pair_layout.cpp` now prints the
+actual offsets of both subobjects alongside `sizeof`. The next MSVC run answers
+it with data. Recorded here as an **open question**, not a result.
+
+**A third finding, and this one is a bug in the test rather than in a compiler.**
+The check `empty bases of different types may share an address` failed on MSVC —
+and it deserved to. "May" is permission, not obligation: an implementation that
+declines the optimisation is still conforming, so asserting it was wrong on every
+platform and happened to pass on two of them. It is a `suite.note` now.
+
+The rule that *is* a language guarantee — two subobjects of the same type may not
+share an address — stays a check, because it is the one that holds everywhere.
+This is the sharpest lesson in the module: a green test suite on two toolchains
+had an assertion in it that was never justified, and only a third ABI exposed it.
 
 ## Exercise 2 — allocator-aware without a stateless tax
 

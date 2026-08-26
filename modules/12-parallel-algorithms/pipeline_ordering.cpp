@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include <acpp/config.hpp>
 #include <acpp/algorithm.hpp>
 #include <acpp/pipeline.hpp>
 #include <acpp/testing.hpp>
@@ -217,9 +218,15 @@ int main() {
         suite.check(total.load() == 19999L * 20000 / 2, "and the result is still correct");
 
         // And the reason the default costs nothing: no_closure is empty, so
-        // [[no_unique_address]] gives it no storage at all.
-        suite.check(sizeof(acpp::dynamic_partitioner<>) == sizeof(std::size_t),
-                    "a partitioner with no closure is just its chunk size");
+        // [[no_unique_address]] gives it no storage at all -- everywhere the
+        // attribute is honoured. On MSVC it is ignored and the empty closure
+        // costs a word, which is the same finding Module 3 records for
+        // compressed_pair and the same reason EnTT keeps the EBO version.
+        suite.note("dynamic_partitioner<> = %zu bytes (chunk size is %zu)",
+                   sizeof(acpp::dynamic_partitioner<>), sizeof(std::size_t));
+        suite.check(sizeof(acpp::dynamic_partitioner<>)
+                        == (acpp::nua_compresses ? sizeof(std::size_t) : 2u * sizeof(std::size_t)),
+                    "a partitioner with no closure costs only its chunk size");
     }
 
     return suite.report();

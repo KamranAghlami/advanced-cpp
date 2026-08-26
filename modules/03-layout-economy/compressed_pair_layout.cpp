@@ -6,6 +6,7 @@
 #include <string>
 #include <type_traits>
 
+#include <acpp/config.hpp>
 #include <acpp/compressed_pair.hpp>
 #include <acpp/testing.hpp>
 
@@ -29,25 +30,12 @@ using pair = acpp::compressed_pair<First, Second>;
 template<typename First, typename Second>
 using nua = acpp::nua_pair<First, Second>;
 
-// ---------------------------------------------------------------------------
 // [[no_unique_address]] is permission, not obligation, and MSVC declines it.
-//
-// Its ABI ignores the standard attribute for backward compatibility and offers
-// [[msvc::no_unique_address]] as the spelling that actually compresses. This is
-// the reason EnTT still ships the inheritance-based compressed_pair instead of
-// deleting it in favour of the attribute -- documented in the course, cited in
-// compressed_pair.hpp, and as of 2026-08-26 measured by CI's msvc job rather
-// than taken on faith.
-//
-// Encoded as a constant rather than an #ifdef around each assertion, so the
-// expectations below stay readable and MSVC keeps real assertions rather than
-// skipped ones. If MSVC ever starts honouring the attribute, these fail.
-// ---------------------------------------------------------------------------
-#if defined _MSC_VER && !defined __clang__
-inline constexpr bool nua_compresses = false;
-#else
-inline constexpr bool nua_compresses = true;
-#endif
+// acpp::nua_compresses records which way this toolchain went, with the
+// measurement behind it; the expectations below are written in terms of it so
+// MSVC keeps real assertions rather than skipped ones. If MSVC ever starts
+// honouring the attribute, these fail.
+using acpp::nua_compresses;
 
 // --- the claim ---------------------------------------------------------------
 
@@ -153,16 +141,29 @@ int main() {
     a.second() = 10;
     suite.check(a.second() == 10 && b.second() == 2, "compressed halves are per-instance");
 
-    // The address rule, which is what produces the sizes above. Two empty bases
-    // of DIFFERENT types may legitimately share an address -- and do, which is
-    // why that pair is one byte. Two of the SAME type may not, which is why
-    // pair<empty, empty> is two.
+    // The address rule, which is what produces the sizes above -- and the place
+    // this test previously overreached. Two empty bases of DIFFERENT types *may*
+    // share an address. "May" is permission, not obligation, so an implementation
+    // that declines is still conforming and asserting it was simply wrong. It is
+    // reported instead.
+    //
+    // Two subobjects of the SAME type may not share an address. That one is a
+    // language guarantee, so it stays a check, and it is the rule that makes
+    // pair<empty, empty> two bytes under the Itanium ABI.
     pair<empty, also_empty> mixed;
     pair<empty, empty> same;
-    suite.check(static_cast<const void *>(&mixed.first()) == static_cast<const void *>(&mixed.second()),
-                "empty bases of different types may share an address");
+    const auto offset_of = [](const auto &pair_ref, const void *member) {
+        return static_cast<std::size_t>(static_cast<const char *>(member)
+                                        - reinterpret_cast<const char *>(&pair_ref));
+    };
+    suite.note("empty bases of different types %s an address here  (offsets %zu / %zu, sizeof %zu)",
+               static_cast<const void *>(&mixed.first()) == static_cast<const void *>(&mixed.second())
+                   ? "share" : "do NOT share",
+               offset_of(mixed, &mixed.first()), offset_of(mixed, &mixed.second()), sizeof(mixed));
+    suite.note("same-type empty bases sit at offsets %zu / %zu of a %zu-byte pair",
+               offset_of(same, &same.get<0>()), offset_of(same, &same.get<1>()), sizeof(same));
     suite.check(static_cast<const void *>(&same.get<0>()) != static_cast<const void *>(&same.get<1>()),
-                "empty bases of the same type may not");
+                "empty bases of the same type may not share an address");
 
     // A pair of non-movable, non-copyable halves is still constructible.
     pair<std::string, std::string> pieces{
