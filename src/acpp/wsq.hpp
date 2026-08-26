@@ -36,11 +36,36 @@
 // only ordering these fences exist to provide.
 //
 // It is compiled only by the wsq_weakened target. Never define it anywhere else.
+//
+// ACPP_WSQ_WEAKEN_RELEASE is the second knob, and it exists because the first one
+// turned out to be untestable on ARM. Measured (Apple clang 21, arm64):
+//
+//                          AArch64      x86-64
+//   seq_cst fence          dmb ish      lock orl $0, -64(%rsp)
+//   acq_rel fence          dmb ish      <nothing>
+//   release store          stlr         movq
+//   relaxed store          str          movq
+//
+// So WEAKEN_FENCE changes no instruction on ARM, and WEAKEN_RELEASE changes no
+// instruction on x86. The two machines catch complementary halves of the memory
+// model, and neither one alone is a test of both. See NOTES.md, exercise 3.
+//
+// What WEAKEN_RELEASE breaks: `push` writes the slot with a relaxed store and
+// then publishes it by storing the new `bottom`. The release on that store is
+// what makes the slot write visible to a thief that acquires `bottom` in
+// `steal`. Demoted to relaxed, the two stores may become visible out of order,
+// and a thief can read a slot the owner has not written yet.
 // ---------------------------------------------------------------------------
 #if defined ACPP_WSQ_WEAKEN_FENCE
 #    define ACPP_WSQ_FENCE_ORDER ::acpp::stl::memory_order_acq_rel
 #else
 #    define ACPP_WSQ_FENCE_ORDER ::acpp::stl::memory_order_seq_cst
+#endif
+
+#if defined ACPP_WSQ_WEAKEN_RELEASE
+#    define ACPP_WSQ_PUBLISH_ORDER ::acpp::stl::memory_order_relaxed
+#else
+#    define ACPP_WSQ_PUBLISH_ORDER ::acpp::stl::memory_order_release
 #endif
 
 namespace acpp {
@@ -102,7 +127,7 @@ public:
 
         // RELEASE, and this is the one everybody gets right: it publishes the
         // slot write to any thief that later acquires `bottom`.
-        bottom.store(b + 1, stl::memory_order_release);
+        bottom.store(b + 1, ACPP_WSQ_PUBLISH_ORDER);
         return true;
     }
 
@@ -285,7 +310,7 @@ public:
         }
 
         array->store(b, item);
-        bottom.store(b + 1, stl::memory_order_release);
+        bottom.store(b + 1, ACPP_WSQ_PUBLISH_ORDER);
     }
 
     value_type pop() noexcept {
