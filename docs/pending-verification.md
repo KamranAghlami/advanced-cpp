@@ -370,8 +370,8 @@ prediction in the section above held>.
 | 5 idle CPU | `modules/10-notifier/NOTES.md` → "Exercise 5" |
 | 6 erasure table | `modules/08-type-erasure/NOTES.md` → "Exercise 1" |
 | 7 cache misses | `modules/06-sparse-set/NOTES.md` → "Exercise 3 — measured" |
-| 8a weakened fence | `modules/09-work-stealing-deque/NOTES.md` → "Exercise 3", replacing the "cannot be tested here" paragraph |
-| 8b/8c ARM + libc++ findings | the owning module's `NOTES.md`; add libc++ as a second column, do not replace |
+| ~~8a weakened fence~~ | **DONE** — `modules/09-work-stealing-deque/NOTES.md` → "Exercise 3" |
+| ~~8b/8c ARM + libc++ findings~~ | **DONE** — Modules 8, 9 and 11 `NOTES.md`; libc++ added as a second column, libstdc++ numbers kept |
 | any new bug | the owning module's `NOTES.md`, plus `docs/notes.md` under "Phase C" |
 
 Then update, in this order:

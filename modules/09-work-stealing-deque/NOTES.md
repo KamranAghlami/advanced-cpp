@@ -439,9 +439,15 @@ The real scaling curve the exercise asks for needs a multi-core machine.
 
 ## Checkpoint
 
-The four answers above are the checkpoint, and the test that would fail on a weak
-memory machine exists (`wsq_weakened`) — with the caveat, stated above, that this
-machine cannot run it meaningfully.
+The four answers above are the checkpoint, and the test that fails on a weak
+memory machine now exists and has done so: `wsq_publish_race_weakened`, 156
+failures in 200 runs on an M1, control clean in 200.
+
+`wsq_weakened` — the *fence* knob — is kept, but it is a recorded expectation
+rather than a test of anything: it passes on x86 because the window is hard to
+hit, and on ARM because clang emits the same barrier for both fence strengths.
+The distinction between those two reasons is the substance of this module, and
+neither is visible from the exit status.
 
 ## Techniques logged
 
