@@ -235,6 +235,40 @@ Showing that advantage requires the push path to be lock-free, which means
 Module 9's work-stealing queue, which means Module 11's executor. Noted there
 rather than claimed here.
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+Same harness, same shared mutex-guarded queue, `nproc` = 16, gcc 13.3 `-O2`,
+Debug build, 4 workers, 3 runs (best per column):
+
+| strategy | CPU (s) | wall (ms) | parks (range across 3 runs) |
+|---|---:|---:|---:|
+| spin (yield loop) | **1.1182** | 301.8 | 0 |
+| 2PC `blocking_notifier` | **0.0024** | 303.2 | 63–89 |
+| 2PC `nonblocking_notifier` | 0.0048 | 304.6 | 239–364 |
+| condvar, signal on every push | 0.0096 | 310.9 | 480 (every run) |
+
+Against the single-core numbers, this is a **reversal, not just a bigger
+gap**: on one core condvar had the lowest idle CPU (0.0015s, beating 2PC's
+0.0033–0.0054s); on 16 real cores **2PC `blocking_notifier` is lowest**
+(0.0024s vs condvar's 0.0096s) — 4× better, in the direction the design
+argument always predicted, on a benchmark whose push path is *still* mutex
+Guarded exactly as before. Nothing about the harness changed; only the
+hardware did — the push path is still mutex-guarded, exactly as before.
+
+The `parks` column is the mechanism, and it moved the most: `blocking_notifier`
+parks on only 63–89 of 480 pushes here, down from 372 on one core — the 2PC
+guard's "don't park if a waiter would just find work already there" check is
+catching far more cases with real parallelism than with time-slicing, because
+a genuinely-concurrent burst is more likely to have a worker already spinning
+past the check when the item lands. `condvar` still signals on literally every
+push (480 parks, both machines, by construction) and pays the mutex + futex
+wake cost every time regardless of whether anyone needed waking — that fixed
+cost is what 16 real cores exposed and 1 time-sliced core hid. This still is
+not the *lock-free-push* advantage the design argument is ultimately about
+(the queue lock is still shared by all three strategies here); it is the 2PC
+guard's redundant-wakeup avoidance winning even before the push path itself
+is decontended.
+
 ## What `_wait_for_task` adds on top
 
 The notifier is the mechanism; the executor's wait loop is where it meets a real

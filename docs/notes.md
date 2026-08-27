@@ -245,9 +245,16 @@ through the same base pointer.
 
 **Contiguous iteration beats node-based, in cache lines** ·
 `modules/06-sparse-set/NOTES.md`
-Measured: 5.6× wall clock over `std::unordered_map` at 1M elements, from 2.5×
-fewer D1 read misses (cachegrind) plus the fact that the map's misses are
-*dependent* loads the prefetcher cannot hide.
+Measured: 5.6× wall clock over `std::unordered_map` at 1M elements (1-vCPU
+droplet), from 2.5× fewer D1 read misses (cachegrind) plus the fact that the
+map's misses are *dependent* loads the prefetcher cannot hide.
+*On a 16-core i9 (2026-08-27):* the two ratios move in opposite directions —
+iteration's edge shrinks to 3.7× (a bigger, faster prefetcher narrows the gap
+for a chain the prefetcher can still chase) while random lookup's edge grows
+to 7.3× (a dependent pointer-chase does not prefetch either way, so it is
+exposed to raw latency and widens as the core gets faster). Same mechanism,
+opposite-signed sensitivity to clock speed depending on which cost — chain
+throughput or chase latency — dominates.
 
 ---
 
@@ -350,6 +357,11 @@ devirtualises the lot and the table measures the optimiser.
 *And:* report best **and** worst of N. On a shared vCPU the spread was larger
 than the differences between mechanisms, which is a result — it says the ranking
 is not established. Measured in `modules/08-type-erasure/NOTES.md`.
+*On a quiet 16-core box (2026-08-27) the ranking resolves* into three tiers,
+not a strict order: raw pointer ≈ virtual call (~1.02–1.06 ns) < delegates
+(~1.26–1.28 ns, `acpp`/`entt` indistinguishable) < `std::function`/`poly`
+(~1.48–1.70 ns). Per-row noise dropped from 3–10 ns to ≤0.05 ns — an order of
+magnitude below the gaps between tiers.
 
 **Local `std::function` inlines too** · same file
 At `-O2` gcc devirtualises a local `std::function` with a known target as
@@ -378,9 +390,18 @@ task is lost, or both take it and it runs twice. Interleaving in
 `modules/09-work-stealing-deque/NOTES.md`.
 
 **A passing stress test on x86 is not evidence** · same NOTES
-The deliberately-weakened build passes 200,000 items with three thieves. x86-TSO
-plus a single core cannot produce the window. The written argument is the
-evidence; the test only catches regressions the machine can exhibit.
+The deliberately-weakened build passes 200,000 items with three thieves on a
+1-vCPU droplet. x86-TSO plus a single core cannot produce the window. The
+written argument is the evidence; the test only catches regressions the
+machine can exhibit.
+*Confirmed the other way on 16-core WSL2 with clang (2026-08-27):* give it
+real parallelism and the same build fails **199/200**, control 0/200 — not
+"the window is hard to hit", the window was simply never open before. Under
+**gcc** on the same 16 cores it stays vacuous (0/50): gcc emits the full
+`seq_cst` barrier for `acq_rel` too on x86-64, a second vacuous
+compiler/platform pairing next to clang's ARM one below. `wsq_weakened` is an
+unfiltered CI test on both compiler legs — this is a live flakiness risk
+under clang, not a settled "recorded expectation."
 
 **Relaxed justified by direction, not by speed** · same file
 `cached_top` is a monotonic lower bound on a counter that only increases, so a
@@ -405,6 +426,14 @@ items. The alternative is hazard pointers or epoch reclamation.
 Single-threaded, the lock-free queue beat `std::mutex` + `std::deque` by only
 1.14×. A futex fast path is a couple of atomics. Expect the win from lock-free
 under *contention*, not from the uncontended path.
+*The real scaling curve (16-core WSL2, 2026-08-27):* at 1 thread the two are
+at parity (0.96×, matching the uncontended-futex argument above); by 16
+threads Chase–Lev is 20.4× faster, because the mutex serialises unconditionally
+regardless of core count (30 ms → 557 ms, 1→16 threads) while Chase–Lev's cost
+rises far more slowly with real `top`-side contention (5 ms → 27 ms). The
+single-core table's "cost drops with more threads" was a queue-depth artifact,
+not parallelism, and does not appear here — on real cores, more thieves means
+more contention for *both* structures, just at very different rates.
 
 ---
 
@@ -454,6 +483,15 @@ Measured over a bursty load: spin 0.259 s CPU, 2PC 0.0033 s, condvar-per-push
 because the harness gives all three the same locked queue. The advantage it is
 built for — no synchronisation on push when nobody sleeps — needs a lock-free
 push path to show up at all.
+*Reverses on 16 real cores (2026-08-27), same locked-queue harness:* 2PC
+`blocking_notifier` drops to 0.0024 s vs condvar's 0.0096 s — 4× better, in
+the direction the design always argued, **without** the push path becoming
+lock-free. The mechanism is the 2PC guard's park-avoidance check: it parks on
+only 63–89 of 480 pushes here (vs 372 on one core), because real concurrency
+means a waiter is more often already past the check when an item lands.
+Condvar still signals — and pays a mutex + futex wake — on literally every
+push by construction (480/480, both machines); that fixed cost is what real
+cores expose and time-slicing hides.
 
 **`printf(fmt)` with no arguments is a security warning, not a style one** ·
 `src/acpp/testing.hpp`
@@ -519,7 +557,14 @@ the pool.
 **Sticky victim stealing** · `taskflow/core/executor.hpp`
 Remember who you last stole from and try them first.
 *Measured:* 23% fewer steal attempts, success rate 14.5% → 19.8% on a
-pipeline-shaped graph.
+pipeline-shaped graph (1-vCPU droplet, time-sliced).
+*On 16 real cores (2026-08-27), 5 independent runs:* the effect survives but
+is noisier than the single-core number implied — attempts ratio ranges 0.633
+to 1.004 (one run was a wash). What is stable across all 5 runs: sticky's
+success rate is never worse than random's and beats it by 2–8 points in 4 of
+5. Real scheduling noise (which core, leftover cache state) now competes with
+the heuristic's signal in a way the deterministic single-core interleaving
+never exposed — report the range, not a point estimate.
 
 **Sampling from a set minus one element** · same file
 `v = rand() % (N-1); if(v >= self) ++v;` — one modulo, one predicated increment,
@@ -557,6 +602,15 @@ call operator costs nothing under `[[no_unique_address]]`.
 The size of a guided claim depends on what is left, so it must be computed from a
 value and committed against that same value. That is the structural difference,
 and it is why guided pays more per chunk and wins only when the tail is uneven.
+*Measured on 16 real cores (2026-08-27), 4000 items, 4 workers:* the course's
+"each partitioner wins one workload" does not hold — **guided wins uniform,
+proportional, *and* heavy-tail**, and this time the ranking is real (≤0.15 ms
+spread within a cell vs multi-ms gaps between workloads). At W=4 on 16 cores
+guided's CAS overhead is cheap next to the real parallelism it buys, so it is
+never worse than a tie. Static loses worst on proportional cost (2.6× behind),
+matching the striding argument; random is worst everywhere, for a
+machine-independent reason — a PRNG call per chunk is strictly more work than
+`fetch_add` for a variance benefit this benchmark's workloads don't need.
 
 **Closure wrapper injection point** · same file
 The user wraps every chunk in their own setup/teardown — a thread-local scratch,
@@ -596,6 +650,12 @@ edges only between cells that are *both* dirty.
 inputs, back into the recomputation.
 *Measured:* 15.3× over full recomputation when 27% of the graph is affected,
 1.23× when 72% is. The benefit is the reciprocal of the affected fraction.
+*Parallel execution, 16-core WSL2 (2026-08-27):* `incr-par` no longer loses
+at every size — it wins at 295 and 867 recomputed cells (1.51× and 1.80×
+faster than `incr-ser`), losing only at the smallest size (64 cells) where
+the per-recompute task-graph build still dominates. The crossover is
+somewhere between 64 and 295 recomputed cells (this benchmark's three fixed
+sizes bracket it, not pin it exactly).
 
 **A sparse set is the right dirty set** · same file
 Needs O(1) membership (for the marking early-out and the edge filter) *and* dense
@@ -688,6 +748,14 @@ x86 can only catch a weakened **fence**; ARM can only catch a weakened
 *Where I'd use it:* before writing "the stress test passes, so the memory order
 is fine" — check first whether the weakening you are testing changes any
 instruction on the machine you are testing it on.
+*x86's half confirmed 2026-08-27, 16-core WSL2:* `wsq_weakened` under clang
+fails 199/200 with real parallelism (control 0/200) — the fence weakening was
+never vacuous on x86, just untested on a machine with enough real cores to
+open the window. **And a second compiler-specific vacuous pairing turned up
+alongside it:** gcc's x86-64 codegen emits the full `seq_cst` barrier for
+`acq_rel` too (confirmed in the disassembly, not inferred), so `wsq_weakened`
+stays vacuous under gcc even on the same 16 cores (0/50). "Which machine can
+see this" turned out to need a third axis — compiler, not just ISA.
 
 **A weakening experiment needs its window held open** ·
 `modules/09-work-stealing-deque/wsq_publish_race.cpp`

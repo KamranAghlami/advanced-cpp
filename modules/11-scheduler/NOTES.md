@@ -406,6 +406,35 @@ has none. Total only for `N >= 2`, which the constructor guarantees. (`%` over a
 non-power-of-two range has modulo bias, so "uniform" is approximate — negligible
 here, and being waved away knowingly.)
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+`nproc` = 16, gcc 13.3, `-O2`, Debug build, same pipeline shape, 4 real workers
+(genuine parallelism, no time-slicing this time), 5 independent runs rather
+than one "best of 5" row — the spread turned out to be the finding:
+
+| run | random attempts | sticky attempts | ratio | random success | sticky success |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 4454 | 3784 | 0.850 | 10.2% | 12.1% |
+| 2 | 3748 | 3763 | 1.004 | 12.2% | 12.1% |
+| 3 | 3585 | 2271 | 0.633 | 12.7% | 20.1% |
+| 4 | 4115 | 2658 | 0.646 | 11.1% | 17.2% |
+| 5 | 4576 | 3182 | 0.695 | 10.0% | 14.3% |
+
+Against the single-core numbers: does sticky victim still help with real
+stealing? **Yes, but the effect size varies run to run far more than the
+single-core table implied.** The attempts ratio ranges from 0.633 (sticky
+wins big) to 1.004 (a wash) — a spread almost as wide as the effect itself,
+so a single "23% fewer attempts" headline number would misrepresent it. What
+*is* stable across all 5 runs: **sticky's success rate is never worse than
+random's**, and beats it by 2–8 points in 4 of 5 runs. On real cores the
+mechanism still works (a worker's last-successful victim is still usually
+its current victim, because producer/consumer edges in the pipeline are
+stable), but real scheduling noise — which of 16 cores each worker actually
+lands on, cache state left over from the previous stage — now competes with
+the heuristic's signal in a way the time-sliced single core's deterministic
+interleaving never exposed. Report the range, not a point estimate, if this
+number is quoted again.
+
 ## Techniques logged
 
 Added to `docs/notes.md`: variant nodes, the partitioned edge vector, atomic join

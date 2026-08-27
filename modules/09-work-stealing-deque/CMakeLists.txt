@@ -4,8 +4,15 @@ acpp_test(wsq_semantics wsq_semantics.cpp)
 acpp_test(wsq_stress wsq_stress.cpp)
 
 # Exercise 3: the same stress test with one memory order deliberately wrong.
-# It is expected to PASS on x86 -- that is the point of running it. See NOTES.md.
-acpp_test(wsq_weakened wsq_stress.cpp)
+#
+# NOT an acpp_test, for the reason wsq_weakened_release below already states:
+# a test whose expected result depends on the machine and compiler is not a
+# regression gate. It was believed to always pass on x86 -- true on one core
+# (the droplet) and under gcc (which emits the seq_cst barrier unconditionally
+# on x86-64, so the weakening changes no instruction there either), but under
+# clang with real parallelism it fails 199/200 runs. See NOTES.md, "The fence
+# half found its machine too", and docs/pending-verification.md section 8d.
+acpp_exercise(wsq_weakened wsq_stress.cpp)
 target_compile_definitions(wsq_weakened PRIVATE ACPP_WSQ_WEAKEN_FENCE)
 
 # Exercise 3, second knob: the weakening ARM can actually catch.
@@ -43,4 +50,4 @@ target_compile_options(wsq_publish_race_weakened PRIVATE ${ACPP_OPTIMIZE})
 acpp_exercise(wsq_bench wsq_bench.cpp)
 target_compile_options(wsq_bench PRIVATE ${ACPP_OPTIMIZE})
 
-set_tests_properties(wsq_stress wsq_weakened wsq_publish_race PROPERTIES TIMEOUT 300)
+set_tests_properties(wsq_stress wsq_publish_race PROPERTIES TIMEOUT 300)

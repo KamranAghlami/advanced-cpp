@@ -157,7 +157,7 @@ int main() {
     }
     std::printf("\n%-10s %14s %14s %10s\n", "threads", "chase-lev (ms)", "mutex (ms)", "ratio");
 
-    for(const unsigned thieves: {0u, 1u, 3u, 7u}) {
+    for(const unsigned thieves: {0u, 1u, 3u, 7u, 15u}) {
         acpp::unbounded_wsq<int *> lock_free{10u};
         locked_deque locked;
 

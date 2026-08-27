@@ -240,14 +240,18 @@ TSan run, where thieves get scheduled more aggressively, it was three.
 turns both `seq_cst` fences into `acq_rel` — the one weakening that removes the
 store-load ordering the algorithm depends on.
 
-**It passes.** 200,000 items, three thieves, every item consumed exactly once.
+**It passes here.** 200,000 items, three thieves, every item consumed exactly
+once. **This section describes the 1-vCPU droplet only — a 16-core x86 box
+with clang makes it fail 199 times in 200; see "The fence half found its
+machine too" below.** Keeping the droplet's original reasoning in place
+because it correctly predicted that result before there was a machine to
+confirm it on.
 
-That is the expected result and the whole point of the exercise. x86-TSO
-guarantees store-load ordering in hardware for the store-buffer case *only* via
-the fence's `mfence`; what actually saves the weakened build is that the
-compiler still emits enough ordering, and that a single-core machine cannot
-produce the interleaving at all. **On this machine the test cannot fail**, and
-the honest conclusion is:
+x86-TSO guarantees store-load ordering in hardware for the store-buffer case
+*only* via the fence's `mfence`; what actually saves the weakened build here is
+that the compiler still emits enough ordering, and that a single-core machine
+cannot produce the interleaving at all. **On this machine the test cannot
+fail**, and the honest conclusion, for this machine, is:
 
 - a passing stress test on x86 is **not evidence** that a memory order is
   correct — it is evidence that you did not hit the window;
@@ -257,8 +261,8 @@ the honest conclusion is:
   (CDSChecker / GenMC / `herd7` against the C11 model), none of which is
   available here.
 
-The weakened target stays in the build as a recorded expectation, with the
-comment saying it is expected to pass.
+The weakened target stays in the build. **Update: "expected to pass" turned
+out to be a claim about this machine, not about x86 in general — see below.**
 
 ### Run on the M1 — Apple clang 21, arm64, 8 cores (2026-08-26)
 
@@ -380,6 +384,66 @@ The unweakened `wsq_publish_race` is now a CI test everywhere. It is a stress
 shape `wsq_stress` does not cover, and on a weakly-ordered runner it is the only
 thing in the tree that would notice this class of regression.
 
+### The fence half found its machine too — 16-core WSL2, clang (2026-08-27)
+
+**199 failures in 200 runs. Control: 0 in 200.** The fence-weakening
+experiment was never vacuous on x86 — it was only ever run on machines that
+couldn't supply real parallelism (one core) or that made it vacuous for a
+different reason (ARM, above). A 16-core x86 box with clang is neither, and
+this is the result:
+
+```
+weakened (wsq_weakened, clang 18.1.3, -O0/Debug): 199/200 failed
+control  (wsq_stress,   clang 18.1.3, -O0/Debug):   0/200 failed
+```
+
+This confirms exactly what "the complementary halves" section above already
+predicted from the codegen table — **x86 can catch a weakened fence** — and
+what the single-core run's own writeup already suspected: "what actually
+saves the weakened build is that a single-core machine cannot produce the
+interleaving at all." Give it 16 real cores and it stops being saved.
+
+**Verified at the instruction level, and it is not what a naive `mfence`
+grep suggests.** Both builds pass a runtime `memory_order` value into the
+same fence call (`movl $0x5,...` for `seq_cst` vs `movl $0x4,...` for
+`acq_rel` — confirmed directly in `steal()`'s disassembly, the only
+instruction-level difference in the function body once address offsets from
+earlier layout shifts are discounted). Under **clang**, `order == acq_rel`
+takes a path that emits no hardware instruction at all, matching the header
+comment's `<nothing at all>` for x86-64 exactly. **Under gcc, it does not**:
+`objdump` on the gcc-built `wsq_weakened` shows the identical
+`lock orq $0x0,(%rsp)` at the fence site for *both* the weakened and control
+builds — gcc emits the full barrier regardless of which order is requested.
+50 runs of `wsq_weakened` under gcc on this same 16-core box: **0 failures**.
+GCC's x86 fence codegen is a **second vacuous pairing**, parallel to clang's
+on ARM — the weakening compiles to nothing observable, just for a different
+compiler/platform combination than the one this module already knew about.
+
+So the accurate statement of which combinations can observe this bug is a
+2×2, not the one-dimensional "x86 vs ARM" framing used above:
+
+| | clang | gcc |
+|---|---|---|
+| **x86, real cores** | catches it (199/200) | vacuous (0/50) — barrier unconditional |
+| **ARM (M1), real cores** | vacuous (0/500) — both orders → `dmb ish` | not measured |
+
+Three of these four cells are now measured, and every vacuous one is vacuous
+for a *compiler* reason (over-conservative or identical codegen), never a
+*hardware* one — the hardware always had the reordering available to exploit
+once a compiler actually removed the barrier and enough real parallelism
+existed to hit the window.
+
+**This changes the Checkpoint below and the CI posture**, not just the
+write-up: `wsq_weakened` is registered as an unfiltered `add_test` and runs
+inside CI's blocking `build` job on both compiler legs. It is not a "recorded
+expectation" that happens to always pass — under clang, on any runner with
+real parallelism, it is expected to **fail** almost every time. Whether
+GitHub's hosted 2-core runners hit the window often enough to already be
+flaky, or rarely enough that it has gone unnoticed, is exactly the kind of
+thing that should be confirmed against actual run history before treating
+this as closed — flagged in `docs/pending-verification.md` rather than
+silently reclassifying the test here.
+
 #### TSan is blind to it
 
 Worth its own line, because it is the second time this repo has been bitten by
@@ -437,17 +501,65 @@ With thieves the queue stays shallow. The lock-free queue is winning here on
 
 The real scaling curve the exercise asks for needs a multi-core machine.
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+`nproc` = 16, gcc 13.3, `-O2`, Debug build, best-of-5 (best time per column,
+independently — the ratio column below is computed from those bests, not
+averaged from the per-run ratios).
+
+| threads | Chase–Lev (ms) | mutex + deque (ms) | ratio |
+|---:|---:|---:|---:|
+| 1 | 5.13 | 4.94 | 0.96× |
+| 2 | 11.11 | 46.58 | 4.19× |
+| 4 | 13.79 | 80.57 | 5.84× |
+| 8 | 17.88 | 235.43 | 13.17× |
+| 16 | 27.29 | 557.43 | 20.43× |
+
+(16-thread row added to `wsq_bench.cpp`'s sweep — it previously stopped at 8.)
+
+Against the single-core numbers above: this is the real scaling curve, and it
+answers the open question cleanly. **The mutex version gets *worse* with more
+threads** (30 ms flat on one core → 557 ms at 16, an 11× regression) because
+every push/pop/steal now genuinely contends for one lock across real parallel
+cores, instead of time-slicing through it. **The lock-free version grows too**
+(5 ms → 27 ms) — more real thieves means more `compare_exchange` retries on
+`top` — but far more slowly, so the ratio widens monotonically from parity at
+1 thread to 20× at 16.
+
+The single-core table's "drop with more threads" (memory-behaviour artifact,
+not parallelism) does not appear here: on real cores, more thieves means more
+contention, and Chase–Lev's cost rises with thread count same as the mutex's
+does — it just rises far more slowly. Both single-core and 16-core numbers are
+correct readings of what they measured; they were never measuring the same
+thing.
+
 ## Checkpoint
 
-The four answers above are the checkpoint, and the test that fails on a weak
-memory machine now exists and has done so: `wsq_publish_race_weakened`, 156
-failures in 200 runs on an M1, control clean in 200.
+The four answers above are the checkpoint, and both weakening tests now fail
+on a machine that can show it — for two different reasons, on two different
+platforms, and neither reason is visible from the exit status alone:
 
-`wsq_weakened` — the *fence* knob — is kept, but it is a recorded expectation
-rather than a test of anything: it passes on x86 because the window is hard to
-hit, and on ARM because clang emits the same barrier for both fence strengths.
-The distinction between those two reasons is the substance of this module, and
-neither is visible from the exit status.
+- `wsq_publish_race_weakened` — the *release* knob — 156 failures in 200 runs
+  on an M1 (arm64), control clean in 200. Real on ARM; x86 stores are already
+  `mov` for both `release` and `relaxed`, so x86 cannot see this one.
+- `wsq_weakened` — the *fence* knob — **199 failures in 200 runs on 16-core
+  WSL2 with clang** (x86-64), control clean in 200. Real on x86 with clang;
+  ARM's `dmb ish` covers both fence strengths, so ARM cannot see this one, and
+  **gcc's x86 codegen also cannot** — it emits the full barrier unconditionally
+  (0/50 failures under gcc on the same 16-core box, confirmed in the
+  disassembly, not just inferred from the pass rate).
+
+Both are now demonstrated bugs on real hardware, not recorded expectations —
+this section previously said `wsq_weakened` "passes on x86 because the window
+is hard to hit," which described the 1-vCPU droplet correctly and the general
+case not at all. **`wsq_weakened` was a live CI risk**: it was an unfiltered
+`add_test`, running in the blocking `build` job under both compiler legs, and
+was expected to fail under clang on any runner with enough real parallelism
+to open the window. Fixed 2026-08-27 by converting it to `acpp_exercise` —
+still buildable and runnable by hand, no longer `ctest`-registered — matching
+`wsq_weakened_release`, which was already wired that way for exactly this
+reason. See `docs/pending-verification.md` §8d for whether CI had already
+been flaky before the fix, which this session could not check.
 
 ## Techniques logged
 

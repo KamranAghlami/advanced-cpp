@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdio>
 #include <functional>
+#include <thread>
 
 #include <entt/poly/poly.hpp>
 #include <entt/signal/delegate.hpp>
@@ -218,7 +219,8 @@ int main(int argc, char **) {
 
     const auto floor = baseline();
 
-    std::printf("machine: %s\n", "1 vCPU shared cloud instance -- see the caveat below");
+    const auto cores = std::thread::hardware_concurrency();
+    std::printf("machine: hardware_concurrency() = %u -- see the caveat below\n", cores);
     std::printf("%-24s %6s %10s %10s %10s\n", "mechanism", "sizeof", "allocs", "ns/call", "worst");
     std::printf("%-24s %6s %10s %10.3f %10.3f\n", "(baseline: inlined)", "-", "-", floor.best, floor.worst);
     const auto row = [](const char *name, std::size_t size, const char *allocs, timing t) {
@@ -251,9 +253,10 @@ int main(int argc, char **) {
     row("entt::poly", sizeof(poly_value), poly_buf,
         ns_per_call([&poly_value](int v) { return poly_value->call(v); }));
 
-    std::printf("\nCaveat: 1 shared vCPU. The spread between best and worst is the noise\n"
-                "floor, and it is comparable to the differences between rows -- so the\n"
-                "ns/call column ranks these mechanisms only where the gap exceeds it.\n"
+    std::printf("\nCaveat: this benchmark is single-threaded -- more cores buy a quieter\n"
+                "machine (no steal time, no neighbour contention), not more parallelism.\n"
+                "The spread between best and worst is the noise floor; the ns/call column\n"
+                "ranks these mechanisms only where the gap between rows exceeds it.\n"
                 "sizeof and allocs are exact; the codegen probes are the other hard evidence.\n");
 
 #if defined ACPP_SANITIZED

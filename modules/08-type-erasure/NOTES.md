@@ -71,6 +71,50 @@ Getting a defensible ranking would need a machine with pinned cores and no steal
 time, and `perf stat` — which `perf_event_paranoid` also denies here (see
 `docs/CLAUDE.md`). Flagged rather than faked.
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+`nproc` = 16, i9-9900K, gcc 13.3 `-O2`, Debug build, no steal time, 5 external
+repetitions of the whole program (best-per-column across the 5). The machine
+label the program printed changed with it — `erasure_table.cpp` hardcoded
+"1 vCPU shared cloud instance"; it now prints `hardware_concurrency()` and a
+caveat about what more cores do and don't buy a single-threaded benchmark.
+
+| mechanism | `sizeof` | allocations | ns/call (best) | (worst) |
+|---|---:|---:|---:|---:|
+| *baseline: inlined* | — | — | **0.304** | 0.322 |
+| raw function pointer | 8 | 0 | 1.029 | 1.054 |
+| virtual call | 8 | 0 | 1.018 | 1.071 |
+| `acpp::delegate` | 16 | 0 | 1.258 | 1.280 |
+| `entt::delegate` | 16 | 0 | 1.272 | 1.282 |
+| `std::function` (small) | 32 | 0 | 1.697 | 1.706 |
+| `std::function` (heap capture) | 32 | **1** | 1.483 | 1.491 |
+| `entt::poly` | 48 | 0 | 1.637 | 1.705 |
+
+**Yes — the ranking resolves on a quiet machine, and it resolves into three
+tiers, not a strict order.** Run-to-run noise on any one row is ≤0.05 ns here
+(the droplet's was 3–10 ns), and that noise is now an order of magnitude
+smaller than the gaps *between* tiers, so this is a real ranking rather than
+a re-reading of the same noise:
+
+1. **raw function pointer ≈ virtual call**, ~1.02–1.06 ns, indistinguishable
+   from each other. Both are one indirect call through a pointer-sized
+   holder — a vtable slot and a bare function pointer cost the same once
+   inlining is off the table.
+2. **`acpp::delegate` ≈ `entt::delegate`**, ~1.26–1.28 ns, indistinguishable
+   from each other and a fixed ~0.25 ns above tier 1 — the cost of carrying
+   an object pointer alongside the function pointer and passing both through
+   the call, not a difference between the two implementations.
+3. **`std::function` (heap) at ~1.48 ns**, then **`entt::poly`** and
+   **`std::function` (small)** essentially tied at ~1.64–1.70 ns, all three
+   well above tiers 1–2. `std::function`'s empty-target check (Exercise 3
+   below) and `poly`'s extra indirection through a separate vtable object
+   both cost more than a delegate's direct object+function pair, and here
+   that cost is finally bigger than the noise that hid it on one core.
+
+The single-core table's caution about allocation counts and the inlined-vs-any-
+indirection gap both still hold — this only resolves the question that table
+explicitly left open, the ranking *within* the indirect group.
+
 ## Exercise 3 — the inlining claim, and the folklore it corrected
 
 Codegen, `-O2`, checked by `codegen_delegate_*`:

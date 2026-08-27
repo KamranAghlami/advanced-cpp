@@ -99,17 +99,43 @@ reading:
 - **Module 11** — `std::visit` compiled to *fewer* instructions than switch-on-index, because
   it is exhaustive by construction and emits no `default` case.
 - **Module 9** — the deliberately-weakened memory order *passes* the stress test on x86.
-  **Settled on an M1 (2026-08-26), and not the way the handoff predicted.** The weakened
-  *fence* cannot fail on ARM either — clang lowers `seq_cst` and `acq_rel` fences to the same
-  `dmb ish`, so that build is not weakened at all. Moving the knob to the publish store
+  **Settled on an M1 (2026-08-26) for the ARM half, and settled again on 16-core x86 WSL2
+  (2026-08-27) for the x86 half — the two results together are the finding.** The weakened
+  *fence* cannot fail on ARM: clang lowers `seq_cst` and `acq_rel` fences to the same
+  `dmb ish`, so that build is not weakened at all there. Moving the knob to the publish store
   (`release` → `relaxed`, a real `stlr` → `str`) and holding the queue shallow enough for the
-  race window to open: **156 failures in 200 runs, control 0 in 200.** TSan saw none of it —
-  every access is a `std::atomic`, so there is no data race, only an insufficient protocol.
-- **Module 10** — spinning costs ~79× the idle CPU of any sleeping strategy, but the
-  two-phase notifier did **not** beat a condvar on idle CPU; its advantage needs a lock-free
-  push path to appear at all.
-- **Module 12** — the partitioner prediction is untested, not disproved: with one core there
-  is no imbalance for a partitioner to fix.
+  race window to open: **156 failures in 200 runs, control 0 in 200** on the M1. **The fence
+  knob, believed vacuous on x86 too, turned out only to be untested there: 16 real cores
+  under clang fail it 199 times in 200** (control 0/200) — clang really does drop the barrier
+  for `acq_rel` on x86-64, exactly as its own codegen comment predicted, and no machine before
+  this one could supply both x86 *and* real parallelism at once. A second finding fell out
+  while confirming it at the instruction level: **gcc's x86-64 codegen never distinguishes
+  the two fence strengths either** (`lock orq` present in both builds) — a second vacuous
+  pairing, on a compiler axis rather than an ISA one (0/50 failures under gcc, same box). TSan
+  saw none of either bug — every access is a `std::atomic`, so there is no data race, only an
+  insufficient protocol. `wsq_weakened` ran unfiltered in CI's blocking `build` job under
+  clang until this was caught; it is now build-only (`acpp_exercise`, matching its sibling
+  `wsq_weakened_release`), so it can no longer gate CI. Whether the clang leg was already
+  flaky before the fix is open — see `docs/pending-verification.md` §8d.
+- **Module 10** — spinning costs ~79× the idle CPU of any sleeping strategy. On the 1-vCPU
+  droplet the two-phase notifier did **not** beat a condvar on idle CPU, and the prediction
+  was that its advantage needs a lock-free push path to appear at all. **On 16 real cores
+  (2026-08-27) it does beat condvar — 4× lower CPU — without the push path becoming
+  lock-free.** The mechanism is the 2PC guard's park-avoidance check catching far more cases
+  under real concurrency (63–89 parks out of 480 pushes, down from 372 on one core); condvar
+  still signals on every push by construction, and that fixed cost is what real cores expose.
+- **Module 12** — the partitioner prediction ("each partitioner wins one workload") was
+  untested on one core, not disproved. **Tested on 16 real cores: it still does not hold** —
+  guided wins uniform, proportional, *and* heavy-tail, and this time the ranking is real
+  (run-to-run spread is ≤0.15 ms against multi-ms gaps between workloads).
+- **Module 9's scaling curve** — also only answerable on real cores. Chase–Lev vs.
+  `std::mutex` + `std::deque` go from parity at 1 thread to 20.4× at 16: the mutex serialises
+  regardless of core count (30 ms → 557 ms) while Chase–Lev's cost under real `top`-side
+  contention rises far more slowly (5 ms → 27 ms).
+- **Module 8's erasure-mechanism ranking** — unresolved on a shared vCPU (noise exceeded the
+  gaps between mechanisms). On a quiet 16-core box it resolves into three tiers: raw pointer ≈
+  virtual call < delegates < `std::function`/`poly`, with per-row noise now an order of
+  magnitude below the gaps between tiers.
 
 The development machine has **one core** and is x86, so every concurrency measurement taken
 there reports `nproc` alongside it and none of them supports a scaling claim. As of
@@ -117,7 +143,11 @@ there reports `nproc` alongside it and none of them supports a scaling claim. As
 8-core M1 caught the Module 9 weakening above, and found two more things on the way — a
 Module 1 cross-DSO bug where `-fvisibility-inlines-hidden` silently gave each shared object
 its own type-id counter (two component types aliasing one storage slot, with the test green),
-and two `#include`s that only libstdc++ was supplying transitively.
+and two `#include`s that only libstdc++ was supplying transitively. As of 2026-08-27 a
+16-core x86 WSL2 box (i9-9900K) settled every throughput and scaling number the single core
+could only flag as untested — see the Modules 8, 9, 10 and 12 bullets above — running the full
+`ctest` suite and 200 iterations of the concurrency set clean, plus all six `verify.sh` legs
+including TSan.
 
 The general rule that fell out of it: **x86 and ARM catch complementary halves of the memory
 model.** x86 lowers acquire/release loads and stores to plain `mov` but distinguishes the two

@@ -135,6 +135,13 @@ layout probes. `--output-on-failure` prints a passing test's notes never, which 
 per-ABI sizes went missing exactly when they were confirmed. Cross-toolchain size comparison
 is the point of having these legs, so the numbers are on the record every run.
 
+`wsq_weakened` (Module 9's deliberately fence-weakened build) was an unfiltered `ctest` test
+inside `build` on both compiler legs until 2026-08-27, believed to always pass on x86. It
+does not — under clang with real parallelism it fails 199/200 runs (`docs/pending-verification.md`
+§8d). It is now `acpp_exercise`, not `add_test`: still built, no longer `ctest`-registered.
+Whether the clang leg was flaky before the fix is unconfirmed — no CI history was reachable
+from the session that found this.
+
 Both sanitizer legs skip `-L measurement`: the template-depth probe compiles one TU dozens
 of times to bisect a bound, which is minutes under a sanitizer and is not a pass/fail signal.
 
@@ -157,7 +164,7 @@ the result. Every table in a `NOTES.md` carries a header line saying which.
 |---|---|---|
 | 1-vCPU x86 droplet, gcc 13.3 / libstdc++ | the development box; everything below describes it | 2026-08-01 |
 | **M1 MacBook Air, 8 cores, Apple clang 21 / libc++ / arm64** | weak memory ordering, a second standard library, Mach-O linkage | 2026-08-26 |
-| 16-core x86 WSL2 | every throughput and scaling number | not yet run |
+| **16-core x86 WSL2, i9-9900K, gcc 13.3 / clang 18.1.3 / libstdc++** | every throughput and scaling number | 2026-08-27 |
 
 What the M1 settled, and what it cost: it caught the Module 9 publish-store
 weakening (156 failures in 200 runs where x86 cannot fail at all), found a
@@ -175,6 +182,23 @@ in the root list file) or cross-DSO type ids silently duplicate.
 Throughput numbers must **not** be taken on the Air — it is fanless and throttles.
 A worked example of how that produces a plausible false result is in
 `modules/09-work-stealing-deque/NOTES.md`.
+
+What the 16-core WSL2 box settled, and what it cost: rows 1–7 of
+`docs/pending-verification.md` — the wsq scaling curve (parity at 1 thread to
+20.4× at 16), the partitioner ranking (guided wins all three workloads, not
+one each — the course prediction still does not hold, now for a different
+reason), the notifier idle-CPU reversal (2PC beats condvar on real cores
+without a lock-free push path), the erasure-mechanism ranking (resolves into
+three tiers once the noise floor drops below the gaps), and the dataflow
+parallel-vs-serial crossover (between 64 and 295 recomputed cells). `perf` is
+**also** unusable here, for a different reason than the droplet
+(`perf_event_paranoid = 4` there; here the Microsoft-patched WSL2 kernel has
+no matching `linux-tools` package in the Ubuntu archive) — cachegrind remains
+the only working instrument in this repo. One environment quirk worth
+remembering if this box is reused: `sudo` here strips the sandbox's
+`http_proxy`/`https_proxy`, so `sudo apt-get install` fails packages with
+`Ign`/502 that a plain (non-sudo) `apt-get download` fetches fine — use
+`sudo -E` for anything that needs the network.
 
 ## Toolchain on the development box (verified 2026-08-01)
 

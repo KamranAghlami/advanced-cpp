@@ -14,6 +14,30 @@ taken on cannot produce the conditions they describe.
 > remain open and still belong to the x86 box** — nothing below them has changed.
 > Details in the §8 sections; the per-module results are in each `NOTES.md`.
 
+> **Update 2026-08-27 — the 16-core x86 WSL2 run happened.** Rows **1–7 are
+> now all measured** — see the table below each row for what changed and what
+> didn't (headline: Module 12's "each partitioner wins one" still doesn't
+> hold, now for a *tested* reason; Module 10's 2PC notifier reverses and beats
+> condvar on real cores; Module 9 gets its real 1→16-thread scaling curve).
+> `perf` is confirmed unusable here too, for a third, unrelated reason (WSL2's
+> kernel has no matching `linux-tools` package) — cachegrind stays the only
+> working instrument in this repo.
+>
+> **The important result wasn't on the list.** §8a's "SETTLED... no, and it
+> never could have been" turns out to describe only the ARM half. Running
+> `wsq_weakened` (Module 9's deliberately fence-weakened build) on 16 real x86
+> cores under clang: **199 failures in 200 runs, control 0/200.** The fence
+> weakening was never vacuous on x86 — it was only ever run on a single core,
+> which cannot open the window, or (misleadingly) assumed to generalize from
+> the ARM result. A second, unplanned finding fell out while confirming this
+> at the instruction level: **gcc's x86-64 codegen is a second vacuous
+> pairing** — it emits the full `seq_cst` barrier for `acq_rel` too, so
+> `wsq_weakened` stays clean under gcc on the same 16 cores (0/50) for the
+> same structural reason ARM is clean under clang. See §8d below — this is
+> the most load-bearing finding in the document. `wsq_weakened` was an
+> unfiltered blocking CI test; it is now `acpp_exercise` (build-only, not
+> `ctest`-registered), matching its sibling `wsq_weakened_release`.
+
 ---
 
 ## The machines, and what each one is actually for
@@ -195,29 +219,29 @@ Each row says what to run, what the single-core result was, and what the open
 question is. **Run each benchmark 3–5 times and use the best**, and record
 `nproc` with every number.
 
-### High value — these are currently *untested*, not merely imprecise
+### High value — **all four DONE 2026-08-27, 16-core WSL2**
 
-| # | Run | Single-core result | The open question |
+| # | Run | Single-core result | Result on 16 real cores |
 |---|---|---|---|
-| 1 | `./build/modules/12-parallel-algorithms/partitioner_bench` | spread ~10%, mostly noise | The course predicts **each partitioner wins one workload** (uniform / proportional / heavy-tail). Untested here — there was no imbalance to fix. Does the prediction hold? |
-| 2 | `./build/modules/09-work-stealing-deque/wsq_bench` | 1.14× uncontended, "threads" column was oversubscription | The actual **scaling curve** at 1/2/4/8/16 threads against `std::deque` + `std::mutex`, which is exercise 5's real deliverable. |
-| 3 | `./build/modules/11-scheduler/sticky_victim_bench` | 23% fewer steal attempts, 14.5%→19.8% hit rate | Does sticky victim still help with **real** stealing? The single-core numbers reflect the OS scheduler's interleaving as much as the heuristic. |
-| 4 | `./build/modules/13-capstone/dataflow_bench` | `incr-par` **lost** to `incr-ser` at every size | Parallel recomputation should win on 16 cores. Where is the crossover — how large must the dirty subgraph be before parallel beats serial? |
+| ~~1~~ | `partitioner_bench` | spread ~10%, mostly noise | **Prediction still doesn't hold, now for a tested reason.** Guided wins uniform, proportional, *and* heavy-tail (not one each) — real this time, spread ≤0.15 ms vs multi-ms gaps between workloads. Detail in `modules/12-parallel-algorithms/NOTES.md`. |
+| ~~2~~ | `wsq_bench` | 1.14× uncontended, "threads" column was oversubscription | **Real scaling curve obtained** (sweep extended to 16 threads in `wsq_bench.cpp`): parity at 1 thread → 20.4× at 16. Mutex serialises regardless of core count (30 ms → 557 ms); Chase–Lev's contention cost rises far more slowly (5 ms → 27 ms). `modules/09-work-stealing-deque/NOTES.md`, Exercise 5. |
+| ~~3~~ | `sticky_victim_bench` | 23% fewer steal attempts, 14.5%→19.8% hit rate | **Effect survives but is noisier than implied** — attempts ratio ranges 0.633–1.004 across 5 runs (one was a wash). Success rate is never worse than random's, though, in all 5. `modules/11-scheduler/NOTES.md`. |
+| ~~4~~ | `dataflow_bench` | `incr-par` **lost** to `incr-ser` at every size | **Crossover found, bracketed between 64 and 295 recomputed cells.** `incr-par` wins at 295 (1.51×) and 867 (1.80×) recomputed cells, still loses at 64. `modules/13-capstone/NOTES.md`. |
 
-### Medium value — a real result exists but is noise-limited
+### Medium value — **all three DONE 2026-08-27, 16-core WSL2**
 
-| # | Run | Single-core result | The open question |
+| # | Run | Single-core result | Result on 16 real cores |
 |---|---|---|---|
-| 5 | `./build/modules/10-notifier/notifier_idle` | spin 0.259 s CPU; 2PC 0.0033 s; **condvar 0.0015 s** | 2PC did *not* beat condvar-per-push on idle CPU, because the harness gives all three the same locked queue. With real contention, does the no-lock-on-push advantage appear? |
-| 6 | `./build/modules/08-type-erasure/erasure_table` | ranking **not established** — spread within a row exceeded differences between rows | Does the ranking of raw pointer / virtual / delegate / `std::function` / `poly` resolve on a quiet machine? |
-| 7 | `./build/modules/06-sparse-set/sparse_set_bench` | 5.6× over `unordered_map` at 1M; cachegrind for misses | Cross-check the cache-miss ratio with `perf stat -e cache-misses,cache-references,LLC-load-misses` if WSL2 allows it. Compare against the cachegrind numbers already recorded. |
+| ~~5~~ | `notifier_idle` | spin 0.259 s CPU; 2PC 0.0033 s; **condvar 0.0015 s** | **Reverses.** 2PC `blocking_notifier` drops to 0.0024 s vs condvar's 0.0096 s — 4× better, **without** the push path becoming lock-free. Mechanism: the 2PC guard parks on only 63–89/480 pushes here (vs 372 on one core) — real concurrency means a waiter is more often already past the check. `modules/10-notifier/NOTES.md`, Exercise 5. |
+| ~~6~~ | `erasure_table` | ranking **not established** — spread within a row exceeded differences between rows | **Resolves into three tiers** on a quiet 16-core box: raw pointer ≈ virtual call < delegates < `std::function`/`poly`. Per-row noise dropped to ≤0.05 ns (was 3–10 ns), an order of magnitude below the gaps between tiers. `erasure_table.cpp`'s hardcoded "1 vCPU" machine label is now `hardware_concurrency()`-driven. `modules/08-type-erasure/NOTES.md`. |
+| ~~7~~ | `sparse_set_bench` | 5.6× over `unordered_map` at 1M; cachegrind for misses | **`perf` still unusable — third distinct reason.** WSL2's Microsoft-patched kernel has no matching `linux-tools` package in the Ubuntu archive (`perf_event_paranoid` is 2 here, better than the droplet's 4, and irrelevant). Wall-clock re-measured instead: the two ratios move opposite ways on a faster core — iteration's edge shrinks (5.3–5.6× → 2.7–3.7×), lookup's edge grows (5.6× → 7.3×). `modules/06-sparse-set/NOTES.md`. |
 
-### Still not answerable on WSL2 — but the M1 changes one of them
+### Row 9 — still open; row 8 fully closed as of 2026-08-27
 
 | # | What | Why |
 |---|---|---|
-| ~~8~~ | ~~Module 9 exercise 3 — does a weakened memory order get caught?~~ | **DONE 2026-08-26.** Yes, once the knob is aimed at the half of the memory model ARM can see. See §8a. |
-| 9 | Module 3 — MSVC `[[no_unique_address]]` layout | Needs MSVC. Neither WSL2 nor macOS has it, but the **Windows host does** — `cl.exe /std:c++20 /EHsc` on `modules/03-layout-economy/compressed_pair_layout.cpp` would settle it. |
+| ~~8~~ | ~~Module 9 exercise 3 — does a weakened memory order get caught?~~ | **DONE 2026-08-26/27, both knobs, both platforms.** ARM catches the *release* weakening (156/200), x86+clang catches the *fence* weakening (199/200, 2026-08-27) — and gcc's x86 codegen turns out to be a second vacuous pairing next to clang's ARM one. See §8d — this one has a CI-flakiness implication that is not yet resolved. |
+| 9 | Module 3 — MSVC `[[no_unique_address]]` layout | **Settled a different way** — CI's `msvc` leg (blocking since 2026-08-26) answers this on every push; see `modules/03-layout-economy/NOTES.md`. Still true that `cl.exe` on a Windows host would answer it locally, but no longer necessary. |
 
 ## Step 2b — the M1's job: weak memory ordering
 
@@ -350,7 +374,73 @@ re-running this on the x86 box.** The first pass ran all repetitions of 64, then
 round-robin interleaving made vanish entirely — on a fanless machine the
 configuration that runs last is measured hottest, and the ordering *was* the
 result. Interleave configurations, or do not compare them. **This still needs the
-16-core box**, which can hold a clock steady.
+16-core box, which can hold a clock steady — not yet done as of 2026-08-27.**
+No existing target builds the three `ACPP_CACHELINE_SIZE` configurations; it
+needs its own harness (three cmake configures or a compile-time-parameterised
+build, interleaved per the note above), not a rerun of an existing binary.
+
+### 8d. The fence half found its machine — 16-core WSL2, clang (2026-08-27)
+
+§8a concluded "no, and it never could have been" from the M1 alone — true for
+ARM, and wrongly generalized to x86 by omission. Nobody had run
+`wsq_weakened` on a machine with both **x86** (where clang's codegen actually
+removes the fence, per the table in §8a) **and real parallelism** (which
+neither the droplet nor the M1's vacuous-on-ARM result could supply) until
+now:
+
+```bash
+for i in $(seq 1 200); do
+  ctest --test-dir build --output-on-failure -R '^wsq_weakened$' || echo "run $i failed"
+done
+# result: 199/200 failed. Control (wsq_stress, same 200 runs): 0/200 failed.
+```
+
+**This is a real, reproducible bug catch, not a probabilistic curiosity** —
+first failure typically appears within the first few runs. Confirmed at the
+instruction level, not just from the pass rate: `objdump` on `steal()` shows
+the two builds differ in exactly one place, the runtime `memory_order` value
+passed into the fence call (`$0x5` seq_cst vs `$0x4` acq_rel); under clang,
+`acq_rel` takes a codepath that emits no hardware instruction, matching the
+`<nothing at all>` cell in §8a's table.
+
+**A second, unplanned finding while confirming that: gcc's x86-64 codegen
+does not distinguish the two orders either.** `objdump` on the *gcc*-built
+`wsq_weakened` shows the identical `lock orq $0x0,(%rsp)` at the fence site
+in both the weakened and control builds. 50 runs of `wsq_weakened` under gcc
+on the same 16-core box: **0 failures.** GCC's x86 fence codegen is
+conservative in exactly the way that makes the weakening experiment vacuous
+— a second such pairing next to clang/ARM, on a different axis (compiler,
+not ISA). The corrected 2×2:
+
+| | clang | gcc |
+|---|---|---|
+| **x86, real cores** | catches it — 199/200 | vacuous — 0/50, barrier unconditional |
+| **ARM (M1), real cores** | vacuous — 0/500, both orders → `dmb ish` | not measured |
+
+**This had an operational implication that went beyond documentation, and it
+is fixed as of 2026-08-27.** `wsq_weakened` was registered as a plain
+`add_test`, running unfiltered inside CI's blocking `build` job
+(`.github/workflows/ci.yml`), on both the gcc and clang legs, on GitHub-hosted
+`ubuntu-24.04` runners. Those runners are not 16-core, but they are
+multi-core, and the failure rate needed to make a CI job flaky is far below
+99.5%.
+
+`wsq_weakened` is now `acpp_exercise`, not `acpp_test`
+(`modules/09-work-stealing-deque/CMakeLists.txt`) — it still builds, and is
+still runnable by hand, but is no longer registered with `ctest` at all, so
+it cannot gate CI. This is not a new pattern: it makes `wsq_weakened` match
+`wsq_weakened_release`, which was *already* `acpp_exercise` for exactly this
+stated reason ("a test whose expected result depends on the machine is not a
+regression gate") — the inconsistency was that `wsq_weakened` hadn't been
+updated to match once its own expected result turned out to be
+machine-dependent too.
+
+**Whether the clang leg of `build` was already intermittently red or
+silently re-run-until-green before this fix landed is still unknown** — that
+needs CI run history, which this session could not check (`gh` was
+unauthenticated here, and the repository was not reachable over the plain
+GitHub API either). Worth a look if anyone has console access to Actions
+history for this repo.
 
 ### What NOT to do on the Air
 
@@ -379,15 +469,17 @@ prediction in the section above held>.
 
 | Result | Goes in |
 |---|---|
-| 1 partitioners | `modules/12-parallel-algorithms/NOTES.md` → "Measured" under exercise 1 |
-| 2 wsq scaling | `modules/09-work-stealing-deque/NOTES.md` → "Exercise 5" |
-| 3 sticky victim | `modules/11-scheduler/NOTES.md` → "sticky victim, measured" |
-| 4 dataflow | `modules/13-capstone/NOTES.md` → "Numbers"; mention the crossover in `docs/design.md` Decision 4 |
-| 5 idle CPU | `modules/10-notifier/NOTES.md` → "Exercise 5" |
-| 6 erasure table | `modules/08-type-erasure/NOTES.md` → "Exercise 1" |
-| 7 cache misses | `modules/06-sparse-set/NOTES.md` → "Exercise 3 — measured" |
+| ~~1 partitioners~~ | **DONE** — `modules/12-parallel-algorithms/NOTES.md` → "Measured — 16-core WSL2" under exercise 1 |
+| ~~2 wsq scaling~~ | **DONE** — `modules/09-work-stealing-deque/NOTES.md` → "Exercise 5" |
+| ~~3 sticky victim~~ | **DONE** — `modules/11-scheduler/NOTES.md` → "Measured — 16-core WSL2" |
+| ~~4 dataflow~~ | **DONE** — `modules/13-capstone/NOTES.md` → "Numbers"; crossover mentioned in `docs/design.md` Decision 4 |
+| ~~5 idle CPU~~ | **DONE** — `modules/10-notifier/NOTES.md` → "Exercise 5" |
+| ~~6 erasure table~~ | **DONE** — `modules/08-type-erasure/NOTES.md` → "Exercise 1" |
+| ~~7 cache misses~~ | **DONE, but `perf` stayed unreachable** — `modules/06-sparse-set/NOTES.md` → "Note on tooling"; wall-clock re-measured instead |
 | ~~8a weakened fence~~ | **DONE** — `modules/09-work-stealing-deque/NOTES.md` → "Exercise 3" |
 | ~~8b/8c ARM + libc++ findings~~ | **DONE** — Modules 8, 9 and 11 `NOTES.md`; libc++ added as a second column, libstdc++ numbers kept |
+| ~~8d x86 fence, gcc's vacuous pairing~~ | **DONE** — `modules/09-work-stealing-deque/NOTES.md` → "The fence half found its machine too" and "Checkpoint"; `src/acpp/wsq.hpp` comment updated. **CI-wiring decision still open — see §8d.** |
+| cache-line-size throughput (§8c) | **still open** — needs its own harness, not a rerun; not attempted 2026-08-27 |
 | any new bug | the owning module's `NOTES.md`, plus `docs/notes.md` under "Phase C" |
 
 Then update, in this order:

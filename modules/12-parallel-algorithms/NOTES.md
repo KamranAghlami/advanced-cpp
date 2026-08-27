@@ -129,6 +129,43 @@ static, N=4000 W=4, auto chunk per worker: 1000 1000 1000 1000
 static, N=10   W=4, auto chunk per worker:    3    3    2    2   <- remainder one at a time
 ```
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+`nproc` = 16, gcc 13.3, `-O2`, Debug build, 4000 items, 4 real workers (genuine
+parallelism this time, not time-slicing), best-of-5, milliseconds:
+
+| workload | static | dynamic | guided | random |
+|---|---:|---:|---:|---:|
+| uniform | 3.73 | 3.82 | **3.70** | 5.65 |
+| cost proportional to index | 6.70 | 3.78 | **3.77** | 6.98 |
+| heavy tail | 4.06 | 3.26 | **3.12** | 5.24 |
+
+Against the single-core numbers: real parallelism is now on the table, but
+**the prediction still does not hold — guided wins all three workloads**, not
+one each. This time it is not noise: run-to-run spread within a cell is
+≤0.15 ms, well under the gap between workloads' winners and losers (static
+alone loses ~2.6× on the proportional workload), so the ranking above is
+established, not guessed at.
+
+What actually explains it: at W=4 on 16 real cores, guided's CAS overhead
+(the cost the single-core table blamed for its uniform loss) is cheap next to
+the four-way real parallelism it buys, so guided is never worse than a tie —
+it ties static on uniform (3.70 vs 3.73, within run-to-run noise) and wins
+outright once there is any imbalance to correct. **Static is bad exactly
+where the note above predicts** — proportional cost with striding still
+leaves the last worker doing more real work than the first, and it shows
+(6.70 ms, worst of the four). **Random stays worst everywhere**, and now for
+a machine-independent reason visible even on one core: generating a random
+chunk size costs a PRNG call per chunk, which is strictly more work than
+`fetch_add`, for a variance benefit that only pays off against an adversarial
+workload this benchmark does not construct.
+
+The course's "each partitioner wins one workload" framing describes a
+different axis than the one this benchmark varies (chunking strategy at fixed
+concurrency) — it would need adversarial, not merely non-uniform, cost shapes
+to force static or random into a win. Worth revisiting with such a shape if
+the course circles back to it; not attempted here.
+
 ### Predicting load imbalance from the wrong partitioner (the checkpoint)
 
 Given a workload shape, the imbalance a static split produces is

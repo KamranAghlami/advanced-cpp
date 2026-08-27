@@ -50,6 +50,13 @@
 // instruction on x86. The two machines catch complementary halves of the memory
 // model, and neither one alone is a test of both. See NOTES.md, exercise 3.
 //
+// x86-64 side confirmed on real hardware 2026-08-27: wsq_weakened fails 199/200
+// on 16 real cores under clang (which does drop the acq_rel barrier, per the
+// table above) and 0/50 under gcc (which does not -- gcc emits the seq_cst
+// barrier unconditionally on x86-64, a second vacuous pairing next to clang/ARM
+// above). wsq_weakened is a live CI-flakiness risk under clang with real
+// parallelism; see NOTES.md and docs/pending-verification.md.
+//
 // What WEAKEN_RELEASE breaks: `push` writes the slot with a relaxed store and
 // then publishes it by storing the new `bottom`. The release on that store is
 // what makes the slot write visible to a thief that acquires `bottom` in

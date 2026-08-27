@@ -75,6 +75,28 @@ neither.
 The `recomputed` column is the only machine-independent number here, and it is
 what the design actually optimises.
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+Same layered DAG, gcc 13.3 `-O2`, Debug build, 4 workers, best of 3.
+Milliseconds:
+
+| layers | width | cells | incr-par | incr-ser | full-ser | recomputed |
+|---:|---:|---:|---:|---:|---:|---:|
+| 6 | 40 | 240 | 0.063 | **0.026** | 0.389 | 64 |
+| 12 | 40 | 480 | **0.265** | 0.401 | 0.856 | 295 |
+| 20 | 60 | 1200 | **0.723** | 1.299 | 2.229 | 867 |
+
+Against the single-core numbers: `incr-par` no longer loses at every size —
+it now **wins at 295 and 867 recomputed cells** (1.51× and 1.80× faster than
+`incr-ser` respectively), which single-core numbers structurally could not
+show (Decision 4's per-recompute task-graph cost was pure overhead with no
+parallelism to buy it back). **The crossover the open question asked for is
+between 64 and 295 recomputed cells** — small updates still lose to
+graph-build overhead, updates from roughly a third of the graph up already
+win. This module's benchmark only has three size points, so that is a
+bracket rather than an exact threshold; narrowing it further needs
+intermediate sizes the benchmark does not currently generate.
+
 ## Two bugs the benchmark had before it said anything true
 
 1. **Passes that dirtied nothing.** The driver set random values, and a value a

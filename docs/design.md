@@ -108,6 +108,15 @@ in the benchmark is the honest measure of the design's benefit; the time ratio
 includes graph construction, which is overhead the full-recomputation baseline
 does not pay. Quoting only the time ratio would flatter the design.
 
+**Measured on 16-core WSL2 (2026-08-27):** the per-recompute graph-build cost
+this decision accepts does get paid back — `incr-par` beats `incr-ser` once
+the dirty subgraph is large enough (1.51× at 295 recomputed cells, 1.80× at
+867), losing only at the smallest size tested (64 cells). The crossover falls
+somewhere between 64 and 295 recomputed cells; see
+`modules/13-capstone/NOTES.md` for the full table. On the single-core
+development box `incr-par` lost at every size, which is expected — a fresh
+task graph per recompute is pure overhead with no parallelism to buy it back.
+
 ## Decision 5 — mutation and recomputation are not concurrent
 
 **Chosen contract:** `set` and `recompute` must not overlap, and `set` calls must

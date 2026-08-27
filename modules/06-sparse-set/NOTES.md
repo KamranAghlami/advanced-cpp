@@ -162,6 +162,42 @@ deterministic, so the numbers above reproduce exactly rather than drifting with
 system noise. It is also ~50× slower, which is why the cache measurement uses
 20,000 elements and the wall-clock one uses a million.
 
+### Measured — 16-core WSL2 (2026-08-27)
+
+`nproc` = 16, i9-9900K, gcc 13.3 `-O2`, Debug build, single-threaded (this
+benchmark has no concurrency, so the extra cores buy nothing directly — the
+point of re-running it here is faster clock and a different cache hierarchy),
+best-of-3, milliseconds:
+
+| elements | packed iterate | map iterate | ratio | packed lookup | map lookup | ratio |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 0.009 | 0.024 | 2.67× | 0.017 | 0.084 | 4.94× |
+| 100,000 | 0.091 | 0.265 | 2.91× | 0.286 | 1.100 | 3.85× |
+| 1,000,000 | 1.043 | 3.853 | 3.69× | 5.333 | 39.108 | 7.33× |
+
+Against the droplet numbers above: **the two ratios moved in opposite
+directions.** Sequential iteration's advantage *shrank* (5.3–5.6× there,
+2.7–3.7× here) — a faster core with a bigger, more effective prefetcher
+narrows the gap for the map's chain-walk when it is at least walking through
+cache lines the prefetcher can chase. Random lookup's advantage *grew* at the
+million-element size (5.6× there, 7.33× here) — a lookup's dependent
+pointer-chase (hash → bucket → chain link) does not prefetch either way, so it
+is exposed to raw memory latency, and the gap between "one dependent load" and
+"a chain of them" widens rather than narrows as the core gets faster. Same
+code, same asymptotic argument, a genuinely different number depending on
+which cost (throughput vs. latency) the faster core actually relieves.
+
+**`perf` is *also* unusable here, but for a different reason than the
+droplet's `perf_event_paranoid`.** WSL2 runs a Microsoft-patched kernel
+(`6.6.87.2-microsoft-standard-WSL2`) that Ubuntu's `linux-tools-generic`
+package does not match — `perf` reports "not found for kernel
+6.6.87.2-microsoft" and asks for a `linux-tools-<exact-version>` package that
+does not exist in the Ubuntu archive for a Microsoft kernel build.
+`perf_event_paranoid` is 2 here (better than the droplet's 4), which would
+otherwise have allowed it. This closes the row 7 cross-check the pending-doc
+asked for: it is not answerable on WSL2 either, and cachegrind remains the
+only instrument that has actually produced numbers in this repo.
+
 ## Exercise 4 — the seam
 
 Four private virtuals, called by the base at the points where a slot's contents
