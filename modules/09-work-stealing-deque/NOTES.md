@@ -201,8 +201,8 @@ That is a clean, plausible, entirely false number. Running the configurations
 vanish. The Air throttles over a sustained run, so whichever configuration ran
 last was being measured on a hotter machine, and the ordering *was* the result.
 
-`docs/pending-verification.md` says not to take throughput numbers on this
-machine. It was right, and the interesting part is that the wrong method still
+The rule elsewhere in this repo is not to take throughput numbers on this
+machine, and it was right — the interesting part is that the wrong method still
 produced a number worth quoting. **Interleave configurations, or do not compare
 them.**
 
@@ -213,6 +213,53 @@ three atomics per queue, so 64 → 256 grows every `unbounded_wsq` by ~576 bytes
 before any elements. On a scheduler with one queue per worker that is per-thread,
 not per-item, so it is probably worth it — but "probably" is the word, and it is
 a trade this repo should measure rather than assume.
+
+#### Measured on the 16-core WSL2 box (2026-08-27) — still not established
+
+**Layout confirmed identical to the M1's numbers**, gcc 13.3, x86-64:
+`sizeof(unbounded_wsq<int *>)` = 192 / 384 / 768 for `ACPP_CACHELINE_SIZE` =
+64 / 128 / 256, alignment matching. The constant does what it says on this
+platform too — never in question, just re-checked.
+
+**Throughput: still not established, and the reason is more interesting than
+"noisy machine."** Three separate build trees (`-DACPP_CACHELINE_SIZE=64`
+`/128/256`, `wsq_bench` at `-O2`), run **round-robin** per the M1 methodology
+note above — one repetition of each config in turn, never all of one
+back-to-back. First pass, 10 reps per config, chase-lev column:
+
+| threads | CL=64 best/med/worst | CL=128 best/med/worst | CL=256 best/med/worst |
+|---:|---:|---:|---:|
+| 8 | 17.91 / 20.14 / 23.80 | 17.47 / 18.66 / 20.35 | 16.91 / 18.48 / 20.14 |
+| 16 | 29.66 / 36.30 / 44.28 | 25.29 / 35.33 / 39.85 | 24.62 / 30.75 / 39.77 |
+
+That looked like a real, monotonic trend — bigger cache line, less false
+sharing, faster — with 256 fastest at every level, exactly what the design
+predicts. **Extending to 30 reps per config made the ordering flip**, not
+just get noisier:
+
+| threads | CL=64 median | CL=128 median | CL=256 median |
+|---:|---:|---:|---:|
+| 8 | 20.58 | **18.59** | 18.87 |
+| 16 | **34.08** | 36.28 | 35.01 |
+
+At 8 threads 128 is now fastest, not 256. At 16 threads **64 is now fastest**
+— the exact opposite of the 10-rep pass and of the design prediction. Individual
+run values also swung wildly between the two passes (a `threads=2` best of
+10.90 ms in the first 10 reps, 3.95 ms somewhere in reps 11–30) — evidence of
+real scheduling jitter on this box, not a stable per-config effect. `uptime`
+during the run showed a moderate recent load average (background `dockerd`,
+`containerd`, `snapd` — this is a general-purpose WSL2 install, not a
+dedicated bare-metal bench rig), which is a plausible source: this box holds
+a clock steadier than the fanless Air, but it is not noise-free.
+
+**Conclusion: the ranking is not established here either, and — unlike every
+other 16-core measurement in this repo's modules — more repetitions made it
+*less* clear, not more.** The 10-rep table would have been a plausible, wrong
+headline ("256 wins": exactly the M1 note's warning about round-robin still
+being able to mislead if it stops too early). The honest result is the same
+shape as the M1's: **a real measurement, reported as unresolved**, with one
+addition — sample size itself needs its own check before trusting a
+"quiet machine" claim, not just interleaving.
 
 ## Exercise 4 — growth and the retained garbage
 
@@ -437,12 +484,10 @@ existed to hit the window.
 write-up: `wsq_weakened` is registered as an unfiltered `add_test` and runs
 inside CI's blocking `build` job on both compiler legs. It is not a "recorded
 expectation" that happens to always pass — under clang, on any runner with
-real parallelism, it is expected to **fail** almost every time. Whether
-GitHub's hosted 2-core runners hit the window often enough to already be
-flaky, or rarely enough that it has gone unnoticed, is exactly the kind of
-thing that should be confirmed against actual run history before treating
-this as closed — flagged in `docs/pending-verification.md` rather than
-silently reclassifying the test here.
+real parallelism, it is expected to **fail** almost every time. Fixed below
+("The fence half found its machine too") and checked against actual CI run
+history: GitHub's hosted 2-core runners never actually hit the window in the
+~18 clang-leg runs before the fix.
 
 #### TSan is blind to it
 
@@ -558,8 +603,8 @@ was expected to fail under clang on any runner with enough real parallelism
 to open the window. Fixed 2026-08-27 by converting it to `acpp_exercise` —
 still buildable and runnable by hand, no longer `ctest`-registered — matching
 `wsq_weakened_release`, which was already wired that way for exactly this
-reason. See `docs/pending-verification.md` §8d for whether CI had already
-been flaky before the fix, which this session could not check.
+reason. Checked against CI run history afterward: it never actually caused a
+CI failure in the ~18 clang-leg runs between introduction and the fix.
 
 ## Techniques logged
 

@@ -115,8 +115,9 @@ reading:
   saw none of either bug — every access is a `std::atomic`, so there is no data race, only an
   insufficient protocol. `wsq_weakened` ran unfiltered in CI's blocking `build` job under
   clang until this was caught; it is now build-only (`acpp_exercise`, matching its sibling
-  `wsq_weakened_release`), so it can no longer gate CI. Whether the clang leg was already
-  flaky before the fix is open — see `docs/pending-verification.md` §8d.
+  `wsq_weakened_release`), so it can no longer gate CI. Checked against CI history: it never
+  actually caused a failure in the ~18 clang-leg runs before the fix — see
+  `modules/09-work-stealing-deque/NOTES.md`, "The fence half found its machine too".
 - **Module 10** — spinning costs ~79× the idle CPU of any sleeping strategy. On the 1-vCPU
   droplet the two-phase notifier did **not** beat a condvar on idle CPU, and the prediction
   was that its advantage needs a lock-free push path to appear at all. **On 16 real cores
@@ -154,12 +155,13 @@ model.** x86 lowers acquire/release loads and stores to plain `mov` but distingu
 fences; ARM is the exact mirror. Neither machine alone tests both, and a weakening experiment
 has to be aimed at the half the machine can see.
 
-[`docs/pending-verification.md`](docs/pending-verification.md) is the handoff: what is
-untested, which machine can settle each item, and where the results go. The short version is
-that a multi-core x86 box owns the throughput numbers and an **ARM** machine owns the
-correctness question, and of the two the second matters more. Start either with
-`./build/modules/00-setup/toolchain_report`, which prints the core count and cache-line size
-and fails if the atomics this repo assumes are not lock-free.
+The multi-machine handoff that used to live in `docs/pending-verification.md` is closed as of
+2026-08-27 — every measurement it tracked has a result (a number, or, for the cache-line-size
+throughput question, a considered "not established"), and the `wsq_weakened` CI risk it turned
+up is fixed. Its results are folded into this section and into each module's `NOTES.md`; the
+file itself is retired rather than kept as a growing pile of past handoffs. Start a new machine
+with `./build/modules/00-setup/toolchain_report`, which prints the core count and cache-line
+size and fails if the atomics this repo assumes are not lock-free.
 
 ## CI
 

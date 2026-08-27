@@ -49,7 +49,9 @@ quietly.
 
 It also prints the core count with a pointed note when it is 1, because that
 single number determines whether any concurrency measurement taken on the machine
-is worth recording. See [`docs/pending-verification.md`](../../docs/pending-verification.md).
+is worth recording — see the 1-vCPU-vs-16-core contrast throughout
+`modules/09-work-stealing-deque/NOTES.md`, `modules/11-scheduler/NOTES.md`, and
+the other Phase C modules' "Measured — 16-core WSL2" sections.
 
 ## What changed here after the rest of the course was written
 
@@ -77,7 +79,8 @@ shaped the most work:
   `CAP_PERFMON`). Module 6's cache measurements went through
   `valgrind --tool=cachegrind --cache-sim=yes` instead — slower, deterministic,
   and the substitute the course itself names.
-- **One core.** Which is why `docs/pending-verification.md` exists.
+- **One core.** Which is why every Phase C module carries a second "Measured —
+  16-core WSL2" section alongside its original single-core numbers.
 
 Two instruments the course lists were replaced rather than skipped, and the
 reasoning is recorded where each was used:

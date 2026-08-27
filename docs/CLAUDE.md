@@ -137,10 +137,12 @@ is the point of having these legs, so the numbers are on the record every run.
 
 `wsq_weakened` (Module 9's deliberately fence-weakened build) was an unfiltered `ctest` test
 inside `build` on both compiler legs until 2026-08-27, believed to always pass on x86. It
-does not — under clang with real parallelism it fails 199/200 runs (`docs/pending-verification.md`
-§8d). It is now `acpp_exercise`, not `add_test`: still built, no longer `ctest`-registered.
-Whether the clang leg was flaky before the fix is unconfirmed — no CI history was reachable
-from the session that found this.
+does not — under clang with real parallelism it fails 199/200 runs
+(`modules/09-work-stealing-deque/NOTES.md`, "The fence half found its machine too"). It is now
+`acpp_exercise`, not `add_test`: still built, no longer `ctest`-registered. Checked against CI
+run history afterward: it never actually caused a failure in the ~18 clang-leg runs between the
+test's introduction and the fix — GitHub's 2-core runners apparently don't open the window
+reliably, unlike this box's 16.
 
 Both sanitizer legs skip `-L measurement`: the template-depth probe compiles one TU dozens
 of times to bisect a bound, which is minutes under a sanitizer and is not a pass/fail signal.
@@ -183,15 +185,23 @@ Throughput numbers must **not** be taken on the Air — it is fanless and thrott
 A worked example of how that produces a plausible false result is in
 `modules/09-work-stealing-deque/NOTES.md`.
 
-What the 16-core WSL2 box settled, and what it cost: rows 1–7 of
-`docs/pending-verification.md` — the wsq scaling curve (parity at 1 thread to
-20.4× at 16), the partitioner ranking (guided wins all three workloads, not
-one each — the course prediction still does not hold, now for a different
-reason), the notifier idle-CPU reversal (2PC beats condvar on real cores
-without a lock-free push path), the erasure-mechanism ranking (resolves into
-three tiers once the noise floor drops below the gaps), and the dataflow
-parallel-vs-serial crossover (between 64 and 295 recomputed cells). `perf` is
-**also** unusable here, for a different reason than the droplet
+What the 16-core WSL2 box settled, and what it cost: the wsq scaling curve
+(parity at 1 thread to 20.4× at 16), the partitioner ranking (guided wins all
+three workloads, not one each — the course prediction still does not hold,
+now for a different reason), the notifier idle-CPU reversal (2PC beats
+condvar on real cores without a lock-free push path), the erasure-mechanism
+ranking (resolves into three tiers once the noise floor drops below the
+gaps), the dataflow parallel-vs-serial crossover (between 64 and 295
+recomputed cells), and — the one that mattered most — `wsq_weakened` failing
+199/200 under clang, which corrected a wrong "x86 can't catch this" belief
+and fixed a real (if apparently unrealized) CI-flakiness risk. Not every
+question resolved: the cache-line-size throughput comparison (64/128/256)
+stayed unresolved even here — a 10-rep pass showed a clean trend, a 30-rep
+pass flipped it, so the honest answer is still "not established," now with
+more evidence behind that conclusion. Full results are in each module's
+`NOTES.md`; `docs/pending-verification.md`, the handoff document that tracked
+all of this, is retired as of 2026-08-27 since nothing in it is still open.
+`perf` is **also** unusable here, for a different reason than the droplet
 (`perf_event_paranoid = 4` there; here the Microsoft-patched WSL2 kernel has
 no matching `linux-tools` package in the Ubuntu archive) — cachegrind remains
 the only working instrument in this repo. One environment quirk worth
