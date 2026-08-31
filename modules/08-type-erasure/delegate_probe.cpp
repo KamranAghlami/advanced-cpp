@@ -9,7 +9,8 @@
 // allocation, trivial copyability, and what happens once the callable has to
 // cross a function boundary.
 //
-// Checked by codegen_delegate_* in this directory's CMakeLists.txt.
+// Checked by codegen_delegate_* and codegen_std_function_* in this directory's
+// CMakeLists.txt.
 
 #include <functional>
 
@@ -38,8 +39,13 @@ int acpp_probe_delegate_inlined(int value) {
     return call(value);
 }
 
-// The one that made the point. Asserted to be *just as free*, so nobody
-// re-derives the folklore from this file later.
+// The one that made the point, and the one whose result depends on the
+// compiler. Two separate things happen here, and they are asserted separately:
+// the DISPATCH devirtualises (every toolchain measured, checked always), and the
+// OBJECT is then deleted outright (gcc >= 13 / clang, checked there only). gcc
+// 11.4 does the first and not the second -- it still calls _M_manager to destroy
+// an _Any_data it proved dead. The delegate needs neither optimisation, because
+// it is trivially destructible; see NOTES.md.
 int acpp_probe_std_function_local(int value) {
     const std::function<int(int)> call{&triple};
     return call(value);

@@ -117,7 +117,7 @@ explicitly left open, the ranking *within* the indirect group.
 
 ## Exercise 3 — the inlining claim, and the folklore it corrected
 
-Codegen, `-O2`, checked by `codegen_delegate_*`:
+Codegen, `-O2`, gcc 13.3, checked by `codegen_delegate_*`:
 
 | probe | body | result |
 |---|---|---|
@@ -128,8 +128,51 @@ Codegen, `-O2`, checked by `codegen_delegate_*`:
 
 The second row is the one that changed a conclusion. The received wisdom is
 "delegates inline, `std::function` does not"; at `-O2` gcc devirtualises a *local*
-`std::function` with a known target just as completely. That test is written to
-**require** it, so if the folklore ever becomes true again the build says so.
+`std::function` with a known target just as completely.
+
+### …and the compiler version that split that row in two
+
+Ubuntu 22.04 WSL2, gcc 11.4, `-O2`, 2026-08-31. The row above is **two claims**,
+and an older compiler does one of them and not the other:
+
+| claim | what it needs | gcc 13.3 / clang 18 | gcc 11.4 |
+|---|---|---|---|
+| the **dispatch** devirtualises | constant-propagate the target through `_Any_data` | yes | **yes** |
+| the **object** disappears | dead-store-eliminate `_Any_data` across a non-trivial destructor | yes | **no** |
+
+gcc 11.4's body is 20 instructions (27 with the stack protector). It writes
+`_M_invoke`'s address into `_Any_data` and **never calls it** — the target is
+reached directly, `call _ZN12_GLOBAL__N_16tripleEi` — so there is no indirection
+left. What survives is the object: `_Any_data` is built on the stack and
+`_M_manager(__destroy_functor)` is called to tear it down. At `-O3` the target
+body inlines too (`leal (%rbx,%rbx,2)` is back), and the `_M_manager` call
+*still* survives. The stack protector in the failure output is a consequence of
+that live stack buffer, not a cause: `-fno-stack-protector` removes seven
+instructions and neither call.
+
+So the folklore did not become true again — the half of it about *dispatch* is
+false on both compilers. What is compiler-version-dependent is only whether the
+optimiser can delete a dead object whose destructor is a function call.
+
+**And that is the sharper version of this module's conclusion.** The delegate's
+edge over `std::function` for a local is not devirtualisation, which both get.
+It is that a delegate is **trivially destructible**, so there is no `_M_manager`
+call for the optimiser to have to be clever enough to remove. gcc 13 is clever
+enough; gcc 11 is not; the delegate never needed either of them to be. A
+property of the type beats an optimisation you have to hope for — which is the
+same argument `static_assert(std::is_trivially_copyable_v<...>)` further down
+this file is making about copies.
+
+The test is split to match, since one half is a portable claim and the other is
+a statement about an optimiser:
+
+- `codegen_std_function_local_devirtualises` — forbids any indirect `call`/`jmp`.
+  Runs everywhere. This is the folklore-correcting assertion.
+- `codegen_std_function_local_is_also_free` — the strict `MAX_LINES 4` version,
+  skipped on gcc < 13. If it ever fails on gcc >= 13 or clang, *that* is the
+  signal the recommendation here needs revisiting.
+
+gcc 12 was never measured, so the cut sits at the version that was.
 
 The real difference shows up once the callable crosses a function boundary. Then
 `std::function` must check for an empty target before dispatching — the standard

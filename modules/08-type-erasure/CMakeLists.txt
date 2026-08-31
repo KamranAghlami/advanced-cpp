@@ -20,12 +20,41 @@ acpp_asm_test(codegen_delegate_inlined delegate_codegen acpp_probe_delegate_inli
     FORBID "\tcall" "\tjmp[a-z]*[ \t]+\\*"
     MAX_LINES 4)
 
-# The finding worth pinning: gcc devirtualises a LOCAL std::function just as
-# completely. If this ever starts failing, the folklore became true again and
-# the recommendation in NOTES.md needs revisiting.
-acpp_asm_test(codegen_std_function_local_is_also_free delegate_codegen acpp_probe_std_function_local
-    FORBID "\tcall" "\tjmp[a-z]*[ \t]+\\*"
-    MAX_LINES 4)
+# The finding worth pinning, in two halves, because they do not hold on the same
+# set of compilers.
+#
+# Half one, asserted everywhere: the LOCAL std::function's DISPATCH is
+# devirtualised. _M_invoke's address is written into _Any_data and then never
+# called -- the target is reached directly, by name. This is the half that
+# corrects the folklore ("delegates inline, std::function does not"), and it
+# holds on every toolchain measured, gcc 11.4 included.
+acpp_asm_test(codegen_std_function_local_devirtualises delegate_codegen acpp_probe_std_function_local
+    FORBID "call[a-z]*[ \t]+\\*" "jmp[a-z]*[ \t]+\\*")
+
+# Half two: the std::function OBJECT vanishes outright, leaving the same two
+# instructions as the delegate. That needs the optimiser to dead-store-eliminate
+# _Any_data across a non-trivial destructor, which is a strictly harder job than
+# devirtualising the call and is where the toolchains diverge.
+#
+# gcc 13.3 and clang 18 do it. gcc 11.4 does not: it devirtualises the call but
+# still builds _Any_data on the stack and calls _M_manager(__destroy_functor) to
+# tear it down -- 20 instructions at -O2, and the stack protector that shows up
+# in the failure output is a consequence of that live stack buffer, not a cause.
+# Measured 2026-08-31; see modules/08-type-erasure/NOTES.md.
+#
+# gcc 12 was never measured, so the cut is at the version that was. If this test
+# fails on gcc >= 13 or on clang, the folklore became true again and the
+# recommendation in NOTES.md needs revisiting.
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 13)
+    message(STATUS
+        "codegen_std_function_local_is_also_free skipped on gcc "
+        "${CMAKE_CXX_COMPILER_VERSION}: it devirtualises the call but keeps the "
+        "object. Needs gcc >= 13; the dispatch half still runs.")
+else()
+    acpp_asm_test(codegen_std_function_local_is_also_free delegate_codegen acpp_probe_std_function_local
+        FORBID "\tcall" "\tjmp[a-z]*[ \t]+\\*"
+        MAX_LINES 4)
+endif()
 
 # For a bound member the delegate's own indirection must go; whether the target
 # body inlines is the optimiser's business, so a direct call by name is allowed
