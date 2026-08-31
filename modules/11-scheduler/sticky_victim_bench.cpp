@@ -38,7 +38,7 @@ void build_pipeline(acpp::taskflow &graph, std::atomic<int> &counter, const int 
                 // and therefore the only way a steal can happen.
                 volatile int sink = 0;
                 for(int spin = 0; spin < 60'000; ++spin) {
-                    sink += spin;
+                    sink = sink + spin;
                 }
                 counter.fetch_add(1, std::memory_order_relaxed);
             }));

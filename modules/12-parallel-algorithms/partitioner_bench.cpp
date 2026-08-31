@@ -28,7 +28,7 @@ constexpr std::size_t items = 4000u;
 void burn(const int units) {
     volatile std::int64_t sink = 0;
     for(int i = 0; i < units * 400; ++i) {
-        sink += i;
+        sink = sink + i;
     }
 }
 
